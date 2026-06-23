@@ -1,0 +1,34 @@
+vitis_ai_detector_node:
+  ros__parameters:
+    model_path: "/home/ubuntu/vitis_ai_work/smartcam_models/models/ssd_adas_pruned_0_95/ssd_adas_pruned_0_95.xmodel"
+    detector_mode: "worker"
+    script_path: "/home/ubuntu/vitis_ai_work/scripts/ssd_adas_oneshot_json.py"
+    worker_script_path: "/home/ubuntu/ros2_ws/src/vitis_ai_detector_pkg/vitis_ai_detector_pkg/vitis_ai_worker.py"
+    worker_log_path: ""
+    worker_softmax: "auto"
+    send_resized_input: true
+    input_topic: "/camera/camera/color/image_raw"
+    output_topic: "/detections"
+    overlay_topic: "/vitis_ai_detector/overlay"
+    overlay_width: 480
+    overlay_height: 360
+    image_path: "/tmp/vitis_ai_latest.jpg"
+    json_path: "/tmp/vitis_ai_detections.json"
+    process_period_sec: 0.0
+    timeout_sec: 10.0
+    worker_startup_timeout_sec: 30.0
+    publish_empty_detections: true
+    publish_overlay: false
+    # Overlay is debug-only visualization and cost ~70 ms/frame (~40% of the
+    # detector callback). Turn it off for max throughput; flip back to true when
+    # you need to see bboxes (e.g. via rqt image_transport compressed).
+    publish_compressed_overlay: false
+    overlay_jpeg_quality: 70
+    log_period_sec: 1.0
+    # Profiling only (OFF for production). To profile, set a path like
+    # "/home/ubuntu/ros2_ws/metrics/vitis_ai_metrics.csv": per-frame timing is
+    # buffered and written on shutdown. "" = disabled (no buffering / no I/O).
+    metrics_csv_path: "" # "type <path + filename.csv> to save log"
+    # When metrics_csv_path is set, auto-collect this many seconds from the first
+    # frame then write the CSV. 0 = until shutdown. (Ignored when path is "".)
+    metrics_duration_sec: 0

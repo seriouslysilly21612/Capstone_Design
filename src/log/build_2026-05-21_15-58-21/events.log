@@ -1,0 +1,10 @@
+[0.000000] (-) TimerEvent: {}
+[0.001522] (-) JobUnselected: {'identifier': 'apu_rpu_bridge_pkg'}
+[0.001824] (-) JobUnselected: {'identifier': 'camera_source_pkg'}
+[0.002626] (-) JobUnselected: {'identifier': 'mock_detection_pkg'}
+[0.003133] (-) JobUnselected: {'identifier': 'my_interfaces'}
+[0.003632] (-) JobUnselected: {'identifier': 'pick_logic_pkg'}
+[0.003899] (-) JobUnselected: {'identifier': 'system_bringup_pkg'}
+[0.004085] (-) JobUnselected: {'identifier': 'target_3d_pkg'}
+[0.004264] (-) JobUnselected: {'identifier': 'vitis_ai_detector_pkg'}
+[0.004526] (-) EventReactorShutdown: {}

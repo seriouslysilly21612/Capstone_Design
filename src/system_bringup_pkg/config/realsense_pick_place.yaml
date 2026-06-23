@@ -1,0 +1,21 @@
+enable_color: true
+enable_depth: true
+enable_sync: false
+align_depth.enable: false
+enable_rgbd: false
+pointcloud.enable: false
+colorizer.enable: false
+enable_infra: false
+enable_infra1: false
+enable_infra2: false
+enable_gyro: false
+enable_accel: false
+# Color lowered 1280x720 -> 848x480 (FPS kept at 30). At 1280x720 the
+# realsense2_camera node wedged in a 100% CPU busy-spin after ~70 s and stopped
+# delivering frames, silently stalling the whole downstream pipeline. The
+# detector downsizes every frame to 480x360 before inference anyway, so the
+# lower color resolution does not reduce detection quality, but it cuts the USB3
+# bandwidth and the on-CPU depth-to-color alignment cost by ~2.3x. Both streams
+# are 16:9, so the 480x360 resize aspect ratio is unchanged.
+depth_module.depth_profile: 848x480x30
+rgb_camera.color_profile: 848x480x30

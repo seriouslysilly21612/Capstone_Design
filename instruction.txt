@@ -1,0 +1,27 @@
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+
+ros2 launch realsense2_camera rs_launch.py \
+  enable_color:=true \
+  enable_depth:=true \
+  enable_sync:=false \
+  align_depth.enable:=true \
+  enable_rgbd:=false \
+  pointcloud.enable:=false \
+  colorizer.enable:=false \
+  enable_infra:=false \
+  enable_infra1:=false \
+  enable_infra2:=false \
+  enable_gyro:=false \
+  enable_accel:=false \
+  depth_module.depth_profile:=848x480x30 \
+  rgb_camera.color_profile:=848x480x30
+
+ros2 run mock_detection_pkg mock_detector \
+--ros-args --remap /camera/image_raw:=/camera/camera/color/image_raw
+
+ros2 run pick_logic_pkg pick_logic
+
+ros2 run target_3d_pkg pick_target_3d_node --ros-args \
+-p patch_radius:=4 \
+-p max_depth_m:=3.5

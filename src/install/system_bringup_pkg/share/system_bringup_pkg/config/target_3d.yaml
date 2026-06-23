@@ -1,0 +1,12 @@
+pick_target_3d_node:
+  ros__parameters:
+    pick_target_topic: /pick_target
+    depth_topic: /camera/camera/aligned_depth_to_color/image_raw
+    camera_info_topic: /camera/camera/aligned_depth_to_color/camera_info
+    output_topic: /pick_target_3d
+
+    depth_scale_16uc1: 0.001
+    patch_radius: 4
+    min_depth_m: 0.05
+    max_depth_m: 3.5
+    log_period_sec: 1.0

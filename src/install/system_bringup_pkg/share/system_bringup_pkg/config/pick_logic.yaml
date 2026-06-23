@@ -1,0 +1,21 @@
+pick_logic_node:
+  ros__parameters:
+    input_topic: /detections
+    output_topic: /pick_target
+
+    min_confidence: 0.3
+
+    allowed_classes:
+      - "car"
+      - "bicycle"
+      - "person"  # 나중에 실제 Class 입력
+
+    image_width: 1280
+    image_height: 720
+    edge_margin_px: 30
+
+    min_bbox_area_px: 400.0
+    max_bbox_area_ratio: 0.5
+
+    publish_invalid_targets: true
+    log_period_sec: 1.0
