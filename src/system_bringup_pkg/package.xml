@@ -11,7 +11,7 @@
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>realsense2_camera</exec_depend>
-  <exec_depend>mock_detection_pkg</exec_depend>
+  <exec_depend>vitis_ai_detector_pkg</exec_depend>
   <exec_depend>pick_logic_pkg</exec_depend>
   <exec_depend>target_3d_pkg</exec_depend>
   <exec_depend>tf2_ros</exec_depend>

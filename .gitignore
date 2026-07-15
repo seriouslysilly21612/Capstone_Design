@@ -19,3 +19,7 @@ __pycache__/
 /.agents/
 *.swp
 *~
+
+# credentials
+*token*.txt
+*.pat
