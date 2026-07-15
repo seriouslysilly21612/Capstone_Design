@@ -6,13 +6,15 @@ Last updated: 2026-06-22
 
 ## System Summary
 
-A ROS2-based pick and place pipeline running on Kria KV260 (APU, Ubuntu 22.04 + ROS2 Humble). The current implementation covers RealSense capture, Vitis-AI DPU detection, 2D target filtering, depth-based 3D localization, and TF conversion to `base_link`. Robot control is not yet implemented.
+A ROS2-based pick-and-place perception pipeline running on Kria KV260 (APU, Ubuntu 22.04 + ROS2 Humble). **Current pipeline**: RealSense → Vitis-AI DPU detection (long-running worker process) → 2D pick-logic filtering → **single-point reverse-projection 3D** (raw depth, `align_depth` OFF) → `base_link` target, **~17 Hz, z verified**. Detector is an SSD ADAS stand-in (car/bicycle/person), not the final pick model. Robot control (RPU/Indy7) not yet implemented.
+
+> This file is a **chronological history**. For the current architecture at a glance, see `workflow.md`; the newest dated section at the bottom is the current state. Earlier "Current Status Snapshot" sections are **superseded** snapshots (they still describe aligned-depth, which has since been replaced by reverse projection).
 
 ---
 
 ## Initial Implemented Workflow (Historical Baseline)
 
-The following was the initial mock-based end-to-end pipeline. It is retained as historical context; see `Current Status Snapshot — 2026-06-22` for the active Vitis-AI pipeline.
+The following was the initial mock-based end-to-end pipeline. It is retained as historical context. This document is chronological — the **current** architecture is the last dated section (`Pipelining + CPU-contention investigation + single-point depth`) plus `workflow.md`; the intermediate "Current Status Snapshot — 2026-06-22" section is an older, now-superseded snapshot (aligned depth, before reverse projection).
 
 ```
 [USB Camera (V4L2, 640x480 BGR8)]
@@ -2050,6 +2052,119 @@ column means from the CSV.
 
 ---
 
+## Detector Optimization Results — LUT + post-process pre-filter — 2026-06-22
+
+### Metrics file layout (~/ros2_ws/metrics/)
+
+```text
+vitis_ai_metrics.csv  = metrics_csv_path target (latest run; overwritten each run)
+vitis_ai_metrics1.csv = stage 1 baseline (before optimization, 546 frames)
+vitis_ai_metrics2.csv = stage 2 after LUT (749 frames)
+                        (stage 3 result currently in vitis_ai_metrics.csv, 788 frames)
+metrics_csv_path config default: /home/ubuntu/ros2_ws/metrics/vitis_ai_metrics.csv
+save_metrics_csv() does os.makedirs(exist_ok=True), so the dir is auto-created.
+```
+
+### Optimization 1: LUT preprocessing (DONE, verified bit-identical)
+
+```text
+src/vitis_ai_detector_pkg/.../vitis_ai_worker.py
+  build_input_lut(): precompute per-channel 256-entry int8 tables once at load
+    (mean/scale/round/clip are constant, input is uint8 -> only 256 values).
+  preprocess_image(): replace per-frame float math with 3 LUT lookups.
+  Verified identical to the old formula bit-for-bit (input_fix -1/0/1/2,
+  random images, 100% match).
+Effect: pre_ms 42.5 -> 12.7 ms.
+```
+
+### Optimization 2: post-process background pre-filter (DONE, verified identical)
+
+```text
+src/vitis_ai_detector_pkg/.../vitis_ai_worker.py
+  postprocess(): most of the 16436 priors are background, so filter them out
+    BEFORE softmax/decode/NMS, then process only the small candidate set.
+    - softmax case (logits): keep prior if z_fg - z_background >= logit(threshold)
+      (safe necessary condition; epsilon margin so FP borderline never dropped).
+    - already-probabilities case: keep prior if any fg prob >= min class threshold.
+    loc dequant + decode_boxes run only on candidates.
+  Verified identical to full-scan path (30 random trials, softmax + non-softmax).
+Effect: post_ms 19.4 -> 7.4 ms.
+```
+
+### Stage-by-stage measurement (each ~1 min, car in view)
+
+```text
+metric              1 baseline     2 +LUT     3 +LUT+post
+publish Hz                8.61      12.17           13.00     (+51% total)
+pre_ms                   42.5       12.7            12.5
+post_ms                  20.1       19.4             7.4
+dpu_ms                   12.7       13.0            12.8      (hardware floor)
+ipc_overhead_ms          10.2       10.1            10.0
+processing_ms            88.7       58.2            45.8      (-43, ~half)
+frame_age_ms            349.4      306.9           292.1
+age_in_ms               260.7      248.7           245.9
+```
+
+Integrity held every stage (sum of leaf means == processing_ms;
+age_in + processing == frame_age).
+
+### Key finding: throughput now limited by camera delivery / callback scheduling, not compute
+
+```text
+Stage 3 processing_ms = 45.8 ms  => arithmetically ~21.8 Hz capable,
+but actual publish rate is only 13.0 Hz.
+The ~31 ms/frame gap = the callback waiting for the next camera frame
+(camera ~17-20 Hz, capped by on-CPU depth-to-color alignment) + executor/busy-skip.
+
+Remaining processing_ms breakdown (45.8 ms):
+  dpu_ms  12.8 (28%, hardware floor, not reducible in Python)
+  pre_ms  12.5 (27%)
+  ipc     10.0 (22%)
+  post_ms  7.4 (16%)
+```
+
+Conclusion: easy compute wins (pre, post) are now spent. Going past ~13 Hz
+needs the camera/scheduling side, not more post-process shaving.
+
+### Remaining levers toward 30 Hz (priority)
+
+```text
+1. Callback pipelining: preprocess frame N+1 while the worker runs DPU on frame N
+   (overlap the ~23 ms dpu+ipc wait). Closes the 13 -> ~21.8 Hz (compute-limit) gap
+   WITHOUT touching the camera. Recommended next.
+2. Raise camera FPS by removing full-frame alignment (see note below). Needed to go
+   above ~21 Hz, and also cuts latency (age_in ~246 ms is 75% of frame_age).
+3. (small) shared memory IPC (ipc 10 -> ~6 ms); further pre_ms shaving.
+   dpu_ms is fixed by the chip.
+```
+
+### Architectural note: depth for x/y/z without full-frame alignment
+
+```text
+pick_target_3d_node only samples depth at ONE pixel (bbox center), but align_depth
+reprojects all ~407k pixels. The plan is NOT to toggle alignment on/off, but to
+REPLACE full-frame alignment with single-point reverse projection:
+  - disable align_depth, subscribe to RAW depth + depth/color intrinsics +
+    depth->color extrinsics (/camera/camera/extrinsics/depth_to_color).
+  - compute depth for the target pixel only, via rs2_project_color_pixel_to_depth_pixel
+    style epipolar line search (cheap per detection).
+This keeps accurate z while removing the alignment CPU cost (helps camera FPS AND
+latency). Do this when latency/FPS demands it; current alignment path works and is
+left ON for now.
+```
+
+### Status at end of session
+
+```text
+DONE:   camera stall fix (resolution), overlay/log off, timing instrumentation,
+        CSV metrics collection, LUT preprocessing, post-process pre-filter.
+RESULT: 8.6 -> 13.0 Hz, processing 88.7 -> 45.8 ms, frame_age 349 -> 292 ms,
+        detection accuracy unchanged (both optimizations verified bit-identical).
+NEXT:   (1) callback pipelining, (2) single-point depth / alignment replacement.
+```
+
+---
+
 ## Pipelining + CPU-contention investigation + single-point depth — 2026-06-22
 
 ### Auto-measurement + boot helpers (tooling)
@@ -2171,115 +2286,343 @@ STILL STANDIN: ssd_adas (car/bicycle/person) is not the final pick object model.
    Plan CPU core isolation so RT control does not starve the vision pipeline.
 ```
 
----
+## YOLOv3-tiny 7-class Model Swap: train → quantize → compile → board deploy → Gate 5 — 2026-07-07
 
-## Detector Optimization Results — LUT + post-process pre-filter — 2026-06-22
+Replaced the SSD ADAS stand-in with a custom **YOLOv3-tiny 7-class** detector
+(`0 apple, 1 peach, 2 orange, 3 banana, 4 tennis_ball, 5 mustard_bottle, 6 person`).
+Full command/gate reference: `yolov3_tiny_execution_plan.md`; decision logic:
+`yolo_v3_process.md`. Model is done and on the board; live real-object validation
+(Gate 5) is partially failing and the work is paused (see end of section).
 
-### Metrics file layout (~/ros2_ws/metrics/)
-
-```text
-vitis_ai_metrics.csv  = metrics_csv_path target (latest run; overwritten each run)
-vitis_ai_metrics1.csv = stage 1 baseline (before optimization, 546 frames)
-vitis_ai_metrics2.csv = stage 2 after LUT (749 frames)
-                        (stage 3 result currently in vitis_ai_metrics.csv, 788 frames)
-metrics_csv_path config default: /home/ubuntu/ros2_ws/metrics/vitis_ai_metrics.csv
-save_metrics_csv() does os.makedirs(exist_ok=True), so the dir is auto-created.
-```
-
-### Optimization 1: LUT preprocessing (DONE, verified bit-identical)
+### 1. Model & framework choice (why)
 
 ```text
-src/vitis_ai_detector_pkg/.../vitis_ai_worker.py
-  build_input_lut(): precompute per-channel 256-entry int8 tables once at load
-    (mean/scale/round/clip are constant, input is uint8 -> only 256 values).
-  preprocess_image(): replace per-frame float math with 3 LUT lookups.
-  Verified identical to the old formula bit-for-bit (input_fix -1/0/1/2,
-  random images, 100% match).
-Effect: pre_ms 42.5 -> 12.7 ms.
+- Structure = YOLOv3-tiny: uses only DPU-supported ops (conv/BN/LeakyReLU,
+  maxpool, nearest upsample, concat per UG1414 v2.5 Table 20) -> whole net on
+  DPU, single subgraph feasible.
+- Trained via ultralytics yolov5 v7.0 repo (models/hub/yolov3-tiny.yaml, classic
+  anchor head) because vai_q_pytorch requires a PyTorch nn.Module. NOT darknet
+  (.weights needs conversion + lacks mosaic), NOT v8 "tinyu" (anchor-free head
+  would break the board decode).
+- Decode = yolov5 style: xy=(2*sig-0.5+grid)*stride, wh=(2*sig)^2*anchor,
+  conf=sig(obj)*sig(cls). Board worker + decode_meta.json written to this and
+  unit-tested bit-identical to the image-test path.
 ```
 
-### Optimization 2: post-process background pre-filter (DONE, verified identical)
+### 2. Dataset (no real training images — decision D2)
+
+Synthetic (BlenderProc + YCB meshes 006/011/013/015/017/056, camera sampled
+around the D10 top-down 0.8 m / gray optical-table geometry) + COCO
+(apple/orange/banana/person) + Open Images (peach, tennis_ball) + BOP ycbv
+(mustard, banana). Real captures allowed for validation only.
 
 ```text
-src/vitis_ai_detector_pkg/.../vitis_ai_worker.py
-  postprocess(): most of the 16436 priors are background, so filter them out
-    BEFORE softmax/decode/NMS, then process only the small candidate set.
-    - softmax case (logits): keep prior if z_fg - z_background >= logit(threshold)
-      (safe necessary condition; epsilon margin so FP borderline never dropped).
-    - already-probabilities case: keep prior if any fg prob >= min class threshold.
-    loc dequant + decode_boxes run only on candidates.
-  Verified identical to full-scan path (30 random trials, softmax + non-softmax).
-Effect: post_ms 19.4 -> 7.4 ms.
+Dataset: train 15,799 / val 2,093  (Gate 1 passed, contact-sheet reviewed)
 ```
 
-### Stage-by-stage measurement (each ~1 min, car in view)
+### 3. Training + the SiLU->Hardswish pivot (Gate 2) [decision D11]
+
+First training used yolov5's default Conv activation = **SiLU**. SiLU is **not a
+DPU-supported op**; the quantizer left it as a float op (`VAIQ_WARN ... aten::silu_`)
+and it would fragment the compile into per-conv CPU subgraphs. Fixed by switching
+activation to **Hardswish** (closest DPU-supported op to SiLU; quantizer maps
+PyTorch Hardswish -> XIR hardswish, compiler supports it) and **retraining**
+(activation is baked into the trained weights; there is no exact SiLU->Hardswish
+weight transform). Added a pre-train **Inspector gate (Gate 0, `12a_inspect_docker.sh`)**
+so DPU-mapping is verified before spending 2 h on training.
 
 ```text
-metric              1 baseline     2 +LUT     3 +LUT+post
-publish Hz                8.61      12.17           13.00     (+51% total)
-pre_ms                   42.5       12.7            12.5
-post_ms                  20.1       19.4             7.4
-dpu_ms                   12.7       13.0            12.8      (hardware floor)
-ipc_overhead_ms          10.2       10.1            10.0
-processing_ms            88.7       58.2            45.8      (-43, ~half)
-frame_age_ms            349.4      306.9           292.1
-age_in_ms               260.7      248.7           245.9
+activation change cost ~ 0 (Hardswish curve ~ SiLU):
+                     SiLU(1st)   Hardswish(2nd, final)
+  all  mAP@0.5        0.758        0.766
+  banana                .694        .738  (P 0.72->0.80)
+Final per-class mAP@0.5 (run pickplace_v3tiny_hswish, 150 ep, ~2 h RTX 4060):
+  apple .625 | peach .955 | orange .734 | banana .738 |
+  tennis_ball .978 | mustard_bottle .823 | person .509
 ```
 
-Integrity held every stage (sum of leaf means == processing_ms;
-age_in + processing == frame_age).
+Confusion diagnosis: only real class-confusion was mustard->banana (0.39). Split
+val by source: synthetic-val mAP 0.993 (mustard diag 0.98, banana cell 0.01),
+ycbv-val banana P 0.434 -> the confusion is confined to ycbv occlusion/clutter,
+not our domain. Gate 2 passed.
 
-### Key finding: throughput now limited by camera delivery / callback scheduling, not compute
+### 4. Quantize + two VAI 2.5 packaging bugs (Gate 3)
+
+Two crashes came from Vitis-AI 2.5's own `pytorch_nndct/nn/modules/hardswish.py`
+(not our code), confirmed against the v2.5/v3.0 GitHub source:
+```text
+(a) __init__ inits undefined symbol FixNeuronWithBackward (dead line; v3.0 deletes it)
+(b) forward calls fake_quantize_per_tensor() missing required args method/inplace
+Fix: 12/12a docker wrappers sed-patch both at container start (--rm image).
+```
 
 ```text
-Stage 3 processing_ms = 45.8 ms  => arithmetically ~21.8 Hz capable,
-but actual publish rate is only 13.0 Hz.
-The ~31 ms/frame gap = the callback waiting for the next camera frame
-(camera ~17-20 Hz, capped by on-CPU depth-to-color alignment) + executor/busy-skip.
-
-Remaining processing_ms breakdown (45.8 ms):
-  dpu_ms  12.8 (28%, hardware floor, not reducible in Python)
-  pre_ms  12.5 (27%)
-  ipc     10.0 (22%)
-  post_ms  7.4 (16%)
+Gate 3 (hswish weights, patched): calib 500 imgs OK, VAIQ_WARN 0,
+  cosine head[0] 0.9923 / head[1] 0.9849  (incl. DPU hardswish fixed-point approx)
+  -> DeployModel_int.xmodel + decode_meta.json exported
+Lesson recorded: read VAIQ_WARN / unknown-op BEFORE trusting the cosine number.
 ```
 
-Conclusion: easy compute wins (pre, post) are now spent. Going past ~13 Hz
-needs the camera/scheduling side, not more post-process shaving.
-
-### Remaining levers toward 30 Hz (priority)
+### 5. Compile + board structure check (Gate 4)
 
 ```text
-1. Callback pipelining: preprocess frame N+1 while the worker runs DPU on frame N
-   (overlap the ~23 ms dpu+ipc wait). Closes the 13 -> ~21.8 Hz (compute-limit) gap
-   WITHOUT touching the camera. Recommended next.
-2. Raise camera FPS by removing full-frame alignment (see note below). Needed to go
-   above ~21 Hz, and also cuts latency (age_in ~246 ms is 75% of frame_age).
-3. (small) shared memory IPC (ipc 10 -> ~6 ms); further pre_ms shaving.
-   dpu_ms is fixed by the chip.
+vai_c_xir: "Total device subgraph number 4, DPU subgraph number 1"  (PASS)
+  ("4" = input-feed + 1 DPU compute block + 2 output tensors; all conv compute
+   is in the single DPU subgraph, matching Inspector's "all ops on DPU".)
+xmodel -> board ~/vitis_ai_work/models/  (md5 e2ca87c2466f715e9ecc00c43b599cc4)
+xdputil verify: fingerprint 0x101000016010406 (B3136),
+  input [1,416,416,3] fixpos 6, outputs [1,26,26,36] & [1,13,13,36] fixpos 2
+  (416/16=26, 416/32=13, ch 36 = 3 anchors x (5+7)) -> matches decode_meta.json
 ```
 
-### Architectural note: depth for x/y/z without full-frame alignment
+### 6. Board deploy: config switch + a latent config bug
+
+Config YAMLs (install->build->src all symlinks, live, no rebuild):
+```text
+vitis_ai_detector.yaml: model_path -> yolov3_tiny_7class.xmodel,
+  worker_script_path -> vitis_ai_worker_yolo.py, send_resized_input -> false
+  (worker does letterbox internally). SSD revert values kept in a top comment.
+pick_logic.yaml: allowed_classes -> 6 pickable (person detected but not pickable = safety).
+FIXED latent bug: metrics_duration_sec 0 -> 0.0 (node declares it double; an
+  integer raises InvalidParameterType and kills the detector on any launch).
+```
+
+Live pipeline came up clean:
+```text
+detector worker mode, 848x480: dpu_ms ~17-23, processing ~50-70 ms
+  (faster than the SSD stand-in). /detections publishing, Gate 6 plumbing OK.
+Smoke on 12 old frames: person generalizes (0.32-0.50, all caught at thr 0.30),
+  ZERO false positives on office clutter.
+```
+
+### 7. Gate 5: real-object validation — sim-to-real gap (partial FAIL, paused)
+
+apple/orange/banana detect well on real objects (0.76-0.90, no FP), but 3 of 6
+classes fail. This is a class-specific domain gap, **not** a threshold or
+preprocessing issue (same frame: 3 classes perfect, 3 at ~0). Rearrange test
+separated the causes:
 
 ```text
-pick_target_3d_node only samples depth at ONE pixel (bbox center), but align_depth
-reprojects all ~407k pixels. The plan is NOT to toggle alignment on/off, but to
-REPLACE full-frame alignment with single-point reverse projection:
-  - disable align_depth, subscribe to RAW depth + depth/color intrinsics +
-    depth->color extrinsics (/camera/camera/extrinsics/depth_to_color).
-  - compute depth for the target pixel only, via rs2_project_color_pixel_to_depth_pixel
-    style epipolar line search (cheap per detection).
-This keeps accurate z while removing the alignment CPU cost (helps camera FPS AND
-latency). Do this when latency/FPS demands it; current alignment path works and is
-left ON for now.
+peach        -> misclassified as apple (peach score ~0.02, apple confident 0.54)
+                = appearance confusion (plastic peach looks apple-like). Hardest.
+tennis_ball  -> 0.004 clustered -> 0.14-0.26 separated (still < 0.5). Marginal.
+mustard      -> lying-down 0.001 -> UPRIGHT 0.66-0.80. = pose sensitivity; the
+                shape IS learned, synthetic just under-covered lying/top-down poses.
+Pattern: COCO-rich classes (apple/orange/banana) transferred; synthetic-dependent
+  classes (peach/tennis/mustard) did not. Threshold tuning cannot help (scores ~0).
+CONFOUND: the test camera was low/oblique, NOT the real top-down D10 geometry.
 ```
 
-### Status at end of session
+### 8. Status at end of session (PAUSED 2026-07-07)
 
 ```text
-DONE:   camera stall fix (resolution), overlay/log off, timing instrumentation,
-        CSV metrics collection, LUT preprocessing, post-process pre-filter.
-RESULT: 8.6 -> 13.0 Hz, processing 88.7 -> 45.8 ms, frame_age 349 -> 292 ms,
-        detection accuracy unchanged (both optimizations verified bit-identical).
-NEXT:   (1) callback pipelining, (2) single-point depth / alignment replacement.
+DONE (no rework): train (Gate2 0.766) / quantize (Gate3) / compile (Gate4);
+  xmodel on board; board inference healthy; apple/orange/banana real-detect OK.
+CONFIG NOW = YOLO (not yet fully validated). Revert to SSD via the comment in
+  vitis_ai_detector.yaml if the stand-in is needed during other board work.
+OPEN (Gate 5): peach/tennis_ball/mustard real-object detection.
+Agreed resume order (synthetic re-render first, D2 preserved):
+  1. re-validate in the REAL top-down geometry (this test wasn't) to separate
+     geometry artifact from true gap;
+  2. re-render synthetic targeting the observed failures (lying bottle top-down,
+     tennis lighting/clutter variety, peach texture vs apple hard-negatives);
+  3. retrain -> requantize -> recompile -> re-verify on board;
+  4. only if peach still fails, revisit D2 (small real training set) — user's call.
+New session onboarding entry point: inst_claude.md.
+Board cleaned up (DPU/camera released) so the parallel RT-kernel work is unaffected.
 ```
+
+### 9. Gate 5 re-validation PASS (D13 6-class) + apple retrain (D14) — 2026-07-09
+
+The D13 6-class model (peach dropped, YCB real scans added) was retrained,
+quantized, compiled, and deployed to the board; then re-validated on real
+top-down objects.
+
+```text
+Gate2 mAP50 0.748 (mustard .933 / tennis .950 / orange·banana .736 /
+  apple .629 (weakest) / person .503).
+Gate3 cosine .9757/.9615 (< prior .99 but > the 0.95 fast-finetune line -> pass).
+Gate4 DPU subgraph 1 (md5 d925c711..., outputs 33ch=(6+5)*3). Old 7-class -> models/*.OLD7.*
+Real top-down: mustard 0.02 -> 0.814 (the payoff), tennis 0.491 -> 0.677,
+  orange 0.850, banana 0.777. => 5/6 classes solid.
+apple only: 0.489 / 0.549 / 0.549 over 3 frames = straddles the 0.50 cut.
+```
+
+Two findings on apple:
+- The dropped **peach** (out-of-distribution) was detected AS apple at 0.462 and
+  suppressed neighbors; removing it from the table raised the real apple
+  0.216 -> 0.549 and lifted the others too. Deployment has no peach, so this
+  false positive is moot in production.
+- The real apple is genuinely marginal — a **color domain gap** (real apple is
+  lighter than the YCB apple) plus apple being the hardest class (round, confuses
+  orange/tennis). NOT a quantity problem (already ~6371 instances).
+
+**D14 (user decision):** stabilize apple with REAL captures from the deployment
+camera — apple alone on the table so single-object auto-label is trivial. Chosen
+over "just more data" because apple's issue is the color gap, not count.
+Done: added `--manual` (Enter=1 frame) capture mode; new `autolabel_single_object.py`
+(DPU top-1 box, forced class-id); ~54 apple frames captured+labeled (1 misdetect
+dropped) -> `datasets/real_apple_yolo` (train-only); `hyp hsv_v` 0.40->0.50 (hsv_h
+kept to avoid apple<->orange confusion). Retraining running on the desktop.
+
+Next on resume: judge new apple mAP -> quantize/compile/deploy -> board Gate5
+(apple stable at 0.7+?) -> **revert the `apple:0.40` threshold hack to 0.50** (it
+was added under the wrong premise that the 0.462 box was the real apple — it was
+the peach) -> Gate 6 pipeline / Gate 7 live.
+
+### 10. Desktop GPU driver hard-freeze during D14 retrain — 2026-07-09 evening
+
+The D14 retrain (`11_train.sh`) hard-froze the whole desktop TWICE, both times
+before finishing epoch 0 (GPU ~50°C, so not thermal). Post-reboot forensics
+(`journalctl -b -1`, kern.log) showed NO OOM, NO NVIDIA Xid, NO MCE — a silent
+hard hang. (The "XID 641" lines were the RealTek NIC chip id, a red herring;
+NVRM was just the boot load banner.)
+
+Root cause: the NVIDIA driver had been switched to **nvidia-driver-595-OPEN**
+(open kernel module, 595.71.05). apt history showed `apt install
+nvidia-driver-595-open` plus a background upgrade 595.58.03 -> 595.71.05 that only
+takes effect after a reboot (a loaded .ko is not swapped until reboot). The open
+module forces GSP firmware, and open+GSP on this GeForce card hard-hangs under
+CUDA load with no logged Xid. This explains "trained fine this afternoon (old
+module still in memory), froze this evening (595.71.05 loaded after the reboot)."
+
+Fix: rolled back to the proprietary driver —
+  sudo apt purge nvidia-driver-595-open nvidia-dkms-595-open nvidia-kernel-source-595-open
+  sudo apt install nvidia-driver-580 && sudo apt autoremove && sudo reboot
+Verified via `/proc/driver/nvidia/version` (no "Open Kernel Module"). Recommended
+`apt-mark hold` on all installed nvidia packages (optionally an
+unattended-upgrades blacklist for "nvidia-"/"libnvidia-") to stop silent
+auto-updates.
+
+Status: driver fixed; D14 retrain then completed cleanly on 580 (see §11 below).
+If it hard-freezes again on the proprietary driver, escalate to hardware
+(memtest86, PSU, PCIe reseat).
+
+### 11. D14 complete — Gate 5 PASS, apple fixed (model swap done) — 2026-07-10
+
+After the driver rollback, `11_train.sh` completed cleanly (hswish5, 2.528h, no
+freeze — confirming the 595-open driver was the cause). Quantize/compile passed
+(md5 9bc6520c, DPU subgraph 1).
+
+Board Gate 5 on the same real top-down frames used for D13:
+```text
+apple   0.489/0.549/0.549 (D13) -> 0.876/0.899/0.875 (D14)   <-- fixed
+orange 0.85-0.88, banana 0.83-0.85, mustard 0.81-0.87, tennis 0.82-0.85
+=> all 6 classes solid on real objects. Model swap (Gates 2-5) complete.
+```
+
+Note: val Gate 2 apple stayed ~0.625 (D13 0.629) because `real_apple_yolo` is
+TRAIN-ONLY, so the val set cannot see the real-apple gain — the board Gate 5 is
+the decisive test, and it jumped 0.5 -> 0.88.
+
+Cleanup: reverted the `apple:0.40` threshold hack to 0.50 in both the worker
+(`vitis_ai_worker_yolo.py`) and `yolov3_tiny_image_test.py` (apple now 0.88, and
+the 0.40 was based on the wrong premise that the 0.462 box was the real apple — it
+was the peach). A weak orange (0.19) fires on the yellow mustard bottle but sits
+far below the 0.50 deployment threshold (harmless).
+
+Deployed xmodel = D14 (md5 9bc6520c); it overwrote D13 on the board without a
+backup — D13 is regenerable from the desktop hswish2 best.pt via 12->13 if needed.
+Old 7-class remains at models/*.OLD7.*.
+
+Remaining: Gate 6 (full pipeline) / Gate 7 (live) — mind the RT-kernel isolcpus
+2-core load.
+
+### 12. Gate 6 full-pipeline performance measurement — 2026-07-10
+
+Measured the full pipeline live for 3 min on 4 cores (isolcpus currently OFF —
+/proc/cmdline has no isolcpus). Harness under ~/vitis_ai_work/perf/: perf_probe.py
+(topic Hz + capture->detection E2E latency via /detections header.stamp + per-core
+& per-node CPU from /proc) + the detector node's built-in per-frame metrics CSV
+(dpu_ms/pre/post). Orchestrator run_gate6_perf.sh enables the node metrics CSV via
+the symlink-live YAML, launches, runs a 180 s probe, stops, restores the YAML,
+summarizes. Outputs: vision_metrics.csv, pipeline_timeseries.csv, cpu_timeseries.csv,
+gate6_summary.csv.
+
+```text
+Vision (per-frame, n=2784): dpu_ms 18.0 (med 17.6, p95 20.5)  pre 17.9  post 6.4
+  worker_ms 42.3  detect_ms 57.5  => DPU not the bottleneck; CPU preprocess caps it.
+Pipeline (1s, n=180): camera 30.0 Hz | det/pick/3d/base all 15.0 Hz (chain 1:1)
+  | capture->detection E2E 137 ms (p95 149) | ~5 objects/frame.
+  Detection is compute-bound ~15 Hz (YOLO worker heavier than old SSD; the earlier
+  "camera-limited ~17Hz" note no longer holds — camera supplies 30fps).
+CPU (1s, n=180), 4 cores: total 79% of 4 (~3.17 cores). Per-node (%/one core):
+  target_3d 68.8 (TOP) | camera 56.9 | detector 49.9 | worker_dpu 36.2 |
+  target_base 13.2 | pick_logic 8.8.
+```
+
+Gate 6 = PASS (end-to-end works, all stages synced at 15 Hz, E2E 137 ms); Gate 7
+perf CSV captured (live checklist still TODO).
+
+Key findings: (1) pick_target_3d_node is the #1 CPU consumer (69% of a core) — its
+depth_callback cv_bridge-converts the 848x480x16 depth image at 30 Hz, but the 3D
+compute (pick_target_callback) only runs ~15 Hz. This confirms the integrated_progress
+prediction that target_3d is the prerequisite to optimize for the future 3+1 EtherCAT
+isolation (vision must fit in 3 cores; it currently needs ~3.17). Fix levers: lower
+realsense depth 30->15 fps (config, biggest), defer cv_bridge to pick_target_callback,
+scalarize the reverse-projection loop. (2) The YOLO worker ALREADY carries the SSD
+pre/post optimizations — build_input_lut/letterbox_lut (LUT preprocess) and
+decode_head int8 objectness pre-filter — so pre_ms/post_ms are already
+post-optimization; the remaining CPU lever is the 3D node, not pre/post.
+
+### 13. Camera FW fix + vision CPU optimization phase 1+2 + strategic pivot to RT — 2026-07-14
+
+Three things happened this session, on the **stock kernel** (5.15.0-1070; RT kernel is
+blocked for vision by the zocl crash below). Full tables live in
+`integrated_progress.md §4.2`; this is the chronological summary.
+
+**(a) D435i camera FW wedge — fixed.** After reconnecting the RealSense, RGB frames
+froze seconds after librealsense start (dmesg `GET_CUR ... -32 (exp. 1024)`, HWM XU
+stall). Survived hardware_reset / physical replug / port change / reboot; V4L2-direct
+capture was unaffected, which layer-split the fault to the librealsense/FW path, not the
+kernel UVC driver. **Fixed by flashing FW 5.16.0.1 → 5.17.0.10** (`rs-fw-update`, official
+`D4XX_FW_Image-5.17.0.10.bin`). Config gained `initial_reset: true` as a wedge defense.
+Diagnostic method in memory `d435i-fw-rgb-wedge-fix`.
+
+**(b) zocl RT-kernel crash — discovered, handed off.** First attempt to run the DPU
+pipeline on the RT kernel (kv260b) crashed the board ~30 s in: SLUB freelist corruption
+in the zocl KDS path (`___slab_alloc` ← `kds_alloc_command[zocl]` ← `zocl_execbuf_ioctl`),
+register-fingerprint-confirmed, kernel Oops → freeze → hard reboot. Not memory/HW/radix —
+it's a memory-safety bug in the zocl **vendor** driver, separate from the radix-tree
+crash we fixed on 07-13. **This is why vision optimization runs on the stock kernel.**
+Handed to the RT-dedicated session; details in `rt_kernel_postmortem.md §12`, resume
+point in memory `zocl-dpu-rt-kernel-crash`.
+
+**(c) Vision CPU optimization phase 1+2 — the three levers predicted in §12 were
+executed, plus more.** Baseline re-measured on stock kernel + new FW: **total 76.8%**
+of 4 cores (target_3d 68.9 TOP). Result after both phases: **total ~44%**
+(≈3.07 → 1.8 cores, **-1.25 cores**), e2e 124 → 81 ms, det held at 15 Hz.
+
+- Phase 1 (76.8 → 53.1%): epipolar reverse-projection **vectorized** (the "scalarize the
+  loop" lever — replaced the per-candidate Python loop with a single (3,N) matmul;
+  original kept as `_loop` reference, A/B-verified over 4500 live picks, mismatch 0);
+  static camera_info/extrinsics subscriptions **pruned** after first receipt; letterbox
+  on the cv2 SIMD path (bit-identical); realsense **depth 30 → 15 fps** (the "biggest"
+  lever from §12); detection cap `process_period_sec: 0.045` (trap: 0.062 drops to a
+  3-frame cadence / 13.8 Hz — must sit inside the 33.3–66.6 ms window).
+- Phase 2 (53.1 → ~44%): the "defer cv_bridge" lever landed as **lazy depth** — the
+  callback stores the msg, and pick time takes a zero-copy `np.frombuffer` view
+  (bit-identical, ~26× vs cv_bridge); base node **static-TF cache** (cache (R,t) once,
+  one matmul per point; error 0.000e+00 vs tf2); worker decode constant hoisting. The
+  **largest single lever was transport**: `.bashrc` was silently forcing CycloneDDS, so
+  1.22 MB images were doing UDP-loopback copies within one board — switching to
+  **FastDDS + shared-memory** (`~/ros2_ws/fastdds_shm_profile.xml`, 16 MB segment) took
+  camera 40 → 29 and detector 39 → 31, -6.6 %p in one move.
+- **Measured-then-rejected**: merging pick_logic+t3d+base into one rclpy process
+  (`pick_post_stack`) cost **+5.4 pt**, not the predicted saving — an rclpy
+  SingleThreadedExecutor rebuilds the whole wait-set per callback, so more entities in
+  one process raises every callback's dispatch cost. Rolled back; the code is kept with
+  the rejection documented. Lesson: don't merge nodes to save CPU in rclpy — only rclcpp
+  composition wins here.
+- Also freed the DP display interrupt storm (11k irq/s → 0) by unbinding `zynqmp-display`;
+  persistence method now confirmed = blacklist the `zynqmp_dpsub` module + `update-initramfs`.
+
+**(d) Strategic decision — RT kernel first, vision performance later.** With vision down
+to ~1.8 cores, there are **~2.2 cores free**; IgH EtherCAT (~0.1–0.3) + control (~0.1–0.4)
+fit with 3×+ margin, so **CPU need not be reduced further** for integration. The next
+priority is therefore **finishing the RT kernel** (production rev-6 + resolving the zocl
+crash), not chasing fps/latency — the zocl crash is the real prerequisite for RT+DPU
+integration, and performance work is better re-baselined on top of RT (expect +5–10 %p
+overhead there). A phase-3 performance lever catalog (POSIX-shm IPC as the one CPU/latency
+win-win, worker 3-stage pipelining, cap tuning, 60 fps color, the YOLOv3-tiny swap, rclcpp
+composition) is parked in `integrated_progress.md §4.2` for after RT is done.

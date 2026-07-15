@@ -4,7 +4,7 @@
 
 This is a **Pick & Place system** running on **Kria KV260** (Zynq UltraScale+ MPSoC) with the following architecture:
 
-- **Hardware**: Kria KV260 starter kit + Intel RealSense D435i depth camera + USB RGB camera
+- **Hardware**: Kria KV260 starter kit + Intel RealSense D435i depth camera (active RGB-D source; a legacy USB camera path in `camera_source_pkg` exists but is unused)
 - **Target Robot**: Neuromeka Indy7 (6-axis collaborative arm) + 3-finger gripper
 - **SoC Processors**:
   - APU (ARM): Ubuntu 22.04 + ROS2 Humble
@@ -15,11 +15,46 @@ This is a **Pick & Place system** running on **Kria KV260** (Zynq UltraScale+ MP
 
 The main pipeline separates into three distinct communication boundaries:
 
-1. **PL → APU**: Vision accelerator (if used) or raw sensor data from PL to ROS2
-2. **APU → RPU**: ROS2 pick decision and trajectory sent to RPU for robot control
-3. **RPU → External Arm**: Ethernet protocol to Neuromeka Indy7 for trajectory execution
+1. **PL ↔ APU**: the DPU (vision accelerator in PL, via the `kv260-smartcam` overlay) is **now active** — the APU feeds frames to the DPU with VART and gets detections back. (The RealSense camera itself enters over USB directly to the APU, not through PL.)
+2. **APU → RPU**: ROS2 pick decision and trajectory sent to RPU for robot control — **not yet implemented**
+3. **RPU → External Arm**: Ethernet protocol to Neuromeka Indy7 for trajectory execution — **not yet implemented**
 
 Current status: RealSense → DPU detection → 2D filtering → single-point 3D (reverse projection) → base-frame target on APU via ROS2 (~17 Hz, z verified). Detector is currently an SSD ADAS stand-in (car/bicycle/person), not the final pick-object model. Robot control layers (RPU bridge, Ethernet/EtherCAT trajectory protocol) not yet implemented.
+
+## Current Implementation Snapshot — Perception (APU)
+
+Run the whole perception pipeline:
+
+```bash
+source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash
+ros2 launch system_bringup_pkg pick_place_vitis_ai.launch.py
+```
+
+Active nodes / files / output topics (camera → 3D pick target):
+
+| Node | File | Output topic |
+|---|---|---|
+| `camera` (realsense2_camera) | config: `system_bringup_pkg/config/realsense_pick_place.yaml` | color / depth / camera_info / extrinsics |
+| `vitis_ai_detector_node` (+ `vitis_ai_worker.py`) | `vitis_ai_detector_pkg/vitis_ai_detector_pkg/` | `/detections` (`DetectionArray`) |
+| `pick_logic_node` | `pick_logic_pkg/pick_logic_pkg/pick_logic.py` | `/pick_target` (`PickTarget`) |
+| `pick_target_3d_node` | `target_3d_pkg/target_3d_pkg/pick_target_3d_node.py` | `/pick_target_3d` (`camera_depth_optical_frame`) |
+| `base_to_camera_tf` (static TF, **placeholder**) | launch argument | `/tf_static` |
+| `pick_target_base_node` | `target_3d_pkg/target_3d_pkg/pick_target_base_node.py` | `/pick_target_base` (`base_link`) |
+
+Node parameters live in `system_bringup_pkg/config/*.yaml` (one per node). Custom messages are in `my_interfaces` (`Detection`, `DetectionArray`, `PickTarget`, `PickTarget3D`).
+
+**Detailed docs (read these before changing perception):**
+- `workflow.md` — node-by-node walkthrough, each parameter's value + rationale, the preprocessing/postprocessing techniques, and the pipeline architecture.
+- `progress.md` — full chronological history (decisions, measurements, root-cause fixes).
+- `yolov3_tiny_execution_plan.md` — confirmed model-swap plan (YOLOv3-tiny 7-class): dataset sourcing (synthetic + public datasets only; **no real-environment training images** by user decision 2026-07-06), UG1414 v2.5-grounded quantize/compile commands, phase gates. Direction doc: `yolov3_tiny_plan.md`.
+
+**Key perception facts (see `workflow.md` for detail):**
+- Detection runs in a **long-running worker process** (`vitis_ai_worker.py`); process isolation fixed a VART `execute_async` segfault. The detector↔worker boundary is a **model-agnostic JSON contract** (swapping the model touches only the worker's preprocessing constants + decode).
+- **Preprocess = LUT**, **postprocess = background pre-filter** — both verified **bit-identical** to the naive version, large speedups.
+- **Callback pipelining**: the subscription callback only stores the newest frame; a worker thread consumes frames back-to-back.
+- **3D = single-point reverse projection** on raw depth (`align_depth` OFF); only the bbox-center pixel is matched to its depth pixel.
+- Throughput ceiling is **camera supply rate** (realsense single-thread), not APU compute.
+- Build note: `vitis_ai_detector_pkg` is editable-installed (egg-link → src is live); `target_3d_pkg` needs `colcon build --packages-select target_3d_pkg --symlink-install` after edits. Config YAMLs are symlinked (live, no rebuild).
 
 ## User Level & Assumptions
 
@@ -99,7 +134,10 @@ If uncertain or sources disagree: state the disagreement, cite both sources, and
 - **Board**: Kria KV260 (latest revision preferred)
 - **OS**: Ubuntu 22.04 LTS (or PetaLinux if required)
 - **ROS2**: Humble
-- **Tools**: Vivado/Vitis/Vitis AI → choose version matching target task and official support matrix
+- **Accelerator**: `kv260-smartcam` overlay; DPU `DPUCZDX8G_ISA1_B3136` (fingerprint `0x101000016010406`), Vitis-AI runtime/library 2.5.0. Boot auto-load via a `kv260-smartcam.service` systemd unit.
+- **Camera**: realsense2_camera v4.57.7 / librealsense 2.57.7; D435i FW 5.16.0.1; color & depth both 848×480×30, `align_depth` OFF.
+- **Current model**: `ssd_adas_pruned_0_95` (480×360 SSD, classes car/bicycle/person) — **stand-in**, not the final pick model.
+- **Tools**: Vivado/Vitis/Vitis AI → match target task & official support matrix.
 - **Avoid breaking changes**: Prefer stable, board-validated versions over "latest" unless specifically required.
 
 ## Known Gaps & TODOs
@@ -111,11 +149,11 @@ If uncertain or sources disagree: state the disagreement, cite both sources, and
 - [ ] Final pickable-object detector for B3136 (YCB/custom; `ssd_adas` is a stand-in)
 - [ ] Camera-to-base calibration (`base_link → camera_link` TF is a placeholder)
 - [ ] RPU firmware + APU↔RPU bridge (`apu_rpu_bridge_pkg`) + Indy7 Ethernet/EtherCAT control
-- [ ] Hardware acceleration (FPGA PL logic for vision pipeline)
+- [ ] Custom PL acceleration beyond the vendor DPU (e.g. pre/post-processing or a custom bitstream). NOTE: the `kv260-smartcam` DPU already accelerates the NN inference in PL.
 
 ## Communication Style
 
-- Answer in **English**, keep technical terms (e.g., "calibration," "depth scale," "device tree") in English.
+- Answer in **Korean**, keep technical terms (e.g., "calibration," "depth scale," "device tree") in English.
 - Be precise, calm, and procedure-oriented.
 - Prefer validation steps and debugging order over speculation.
 - Do not make strong claims without high-priority source support.
