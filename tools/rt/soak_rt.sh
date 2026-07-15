@@ -17,7 +17,12 @@
 set -o pipefail
 DUR="${1:-1200}"
 STAMP=$(date +%Y%m%d-%H%M%S)
-LOG="$HOME/ros2_ws/crash_logs/soak_rt_${STAMP}.log"
+# 저장소 상대경로로 해석 (tools/rt/ → ../.. = ros2_ws). clone 위치와 무관하게 동작하고,
+# sudo로 돌려 $HOME이 /root가 돼도 엉뚱한 곳에 쓰지 않는다.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+LOGDIR="$REPO_ROOT/evidence/crash_logs"
+mkdir -p "$LOGDIR"
+LOG="$LOGDIR/soak_rt_${STAMP}.log"
 PAT="sleeping function called from invalid context|scheduling while atomic|BUG:|Preemption disabled at|WARNING.*fpsimd|Unable to handle kernel|Internal error"
 MEM_FLOOR_MB=300      # MemAvailable 이 아래면 보드 보호 위해 중단
 LOAD_CEIL=40          # load1 이 위면 중단

@@ -14,7 +14,9 @@
 # =============================================================================
 set -o pipefail
 IDLE=${1:-120}; LOAD=${2:-300}
-LOGDIR=/home/ubuntu/ros2_ws/crash_logs
+# 저장소 상대경로로 해석 (tools/rt/ → ../.. = ros2_ws). sudo로 돌리므로 $HOME은 쓸 수 없다.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+LOGDIR="$REPO_ROOT/evidence/crash_logs"
 STAMP=$(date +%Y%m%d-%H%M%S)
 LOG="$LOGDIR/cyclic_${STAMP}.log"
 PAT="sleeping function called from invalid context|scheduling while atomic|BUG:|Preemption disabled at|WARNING.*fpsimd|Unable to handle kernel|Internal error"
