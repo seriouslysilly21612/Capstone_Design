@@ -1,5 +1,5 @@
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import PathJoinSubstitution
 
@@ -8,6 +8,25 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    # DDS transport (2026-07-15: moved here from ~/.bashrc so the repo is
+    # clone-and-run). Every node below ships 848x480 Images (1.16 MB) to the
+    # next one; without this profile FastDDS uses its default 512 KB SHM
+    # segment, silently falls back to UDP loopback for anything bigger, and
+    # the pipeline costs +6.6%p CPU with no error to tell you why.
+    # See config/fastdds_shm_profile.xml for the segment sizing.
+    #
+    # These are set before any Node/Include below, so every process launched
+    # here inherits them. Processes started elsewhere (`ros2 topic hz` in
+    # another terminal) do NOT get them, and that is fine: rmw_fastrtps_cpp is
+    # already ROS 2 Humble's default RMW, so they still match on the wire, and
+    # a subscriber reads out of the *publisher's* segment — only the publisher
+    # needs the larger size.
+    dds_profile = PathJoinSubstitution([
+        FindPackageShare('system_bringup_pkg'),
+        'config',
+        'fastdds_shm_profile.xml',
+    ])
+
     realsense_launch = PathJoinSubstitution([
         FindPackageShare('realsense2_camera'),
         'launch',
@@ -55,6 +74,9 @@ def generate_launch_description():
     ])
 
     return LaunchDescription([
+        SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp'),
+        SetEnvironmentVariable('FASTRTPS_DEFAULT_PROFILES_FILE', dds_profile),
+
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(realsense_launch),
             launch_arguments={

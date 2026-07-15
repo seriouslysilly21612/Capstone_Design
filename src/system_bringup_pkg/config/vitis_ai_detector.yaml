@@ -44,8 +44,10 @@ vitis_ai_detector_node:
     overlay_jpeg_quality: 70
     log_period_sec: 1.0
     # Profiling only (OFF for production). To profile, set a path like
-    # "/home/ubuntu/ros2_ws/metrics/vitis_ai_metrics.csv": per-frame timing is
-    # buffered and written on shutdown. "" = disabled (no buffering / no I/O).
+    # "/home/ubuntu/ros2_ws/evidence/metrics/vitis_ai_metrics.csv": per-frame
+    # timing is buffered and written on shutdown. Must be absolute — ROS
+    # parameter YAML expands neither ~ nor environment variables.
+    # "" = disabled (no buffering / no I/O).
 
     metrics_csv_path: ""
     # When metrics_csv_path is set, auto-collect this many seconds from the first

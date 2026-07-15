@@ -15,8 +15,13 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'),
             glob(os.path.join('launch', '*.launch.py'))),
+        # *.xml picks up fastdds_shm_profile.xml, which the launch file points
+        # FASTRTPS_DEFAULT_PROFILES_FILE at. It must be installed, not just
+        # present in src/, so a plain `git clone && colcon build` gets SHM
+        # transport with no shell setup.
         (os.path.join('share', package_name, 'config'),
-            glob(os.path.join('config', '*.yaml'))),
+            glob(os.path.join('config', '*.yaml'))
+            + glob(os.path.join('config', '*.xml'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
