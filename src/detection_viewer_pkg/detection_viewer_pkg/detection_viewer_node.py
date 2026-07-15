@@ -57,9 +57,22 @@ class DetectionViewer(Node):
         super().__init__("detection_viewer_node")
         self.window = window
         self.buffer_len = buffer_len
-        # stamp -> decoded BGR frame. OrderedDict as a bounded FIFO: frames
-        # arrive at ~2x the detection rate, so the join target is always recent.
+        # The join is two-sided because the two streams race. A detection is
+        # published ~37 ms after its frame was captured and then crosses the
+        # network; its compressed twin is encoded and crosses the network on an
+        # independent path. Either can arrive first.
+        #   frames:  stamp -> decoded BGR frame   (covers "image arrived first")
+        #   pending: stamp -> DetectionArray      (covers "detection arrived first")
+        # Both are bounded FIFOs; whichever side completes a pair renders it.
         self.frames = OrderedDict()
+        self.pending = OrderedDict()
+        # A detection whose image has not shown up within this many detections
+        # is never going to be useful — the frame is already stale on screen.
+        self.pending_len = 10
+        # Guards against rendering backwards: a pathologically late image could
+        # otherwise draw frame N after N+1 is already up, which reads as a
+        # stutter. Skipping is honest — we count it rather than show it.
+        self.last_rendered = None
 
         # BEST_EFFORT on the image: the publisher is RELIABLE, which is
         # compatible, and asking for RELIABLE over the network would invite
@@ -84,8 +97,10 @@ class DetectionViewer(Node):
 
         self.n_img = 0
         self.n_det = 0
-        self.n_hit = 0
-        self.n_miss = 0
+        self.n_hit = 0     # image was already buffered when the detection landed
+        self.n_late = 0    # detection waited; its image landed after (the two-sided win)
+        self.n_drop = 0    # detection aged out of pending — its image never came
+        self.n_stale = 0   # pair completed but out of order; skipped to keep time moving forward
         self.create_timer(5.0, self.report)
 
         cv2.namedWindow(self.window, cv2.WINDOW_NORMAL)
@@ -99,22 +114,40 @@ class DetectionViewer(Node):
         if frame is None:
             self.get_logger().warn("imdecode failed", throttle_duration_sec=5.0)
             return
-        self.frames[stamp_key(msg.header)] = frame
+        key = stamp_key(msg.header)
+        self.frames[key] = frame
         while len(self.frames) > self.buffer_len:
             self.frames.popitem(last=False)
         self.n_img += 1
+
+        # The other half of the join: a detection may already be waiting on this
+        # exact frame.
+        waiting = self.pending.pop(key, None)
+        if waiting is not None:
+            self.n_late += 1
+            self.try_render(key, frame, waiting)
 
     def on_detections(self, msg):
         self.n_det += 1
         key = stamp_key(msg.header)
         frame = self.frames.get(key)
         if frame is None:
-            # Not an error per se: the detector may have processed a frame whose
-            # compressed twin we dropped, or we joined the graph mid-stream.
-            # A persistently high miss rate means the join is broken, not lossy.
-            self.n_miss += 1
+            # Not a miss yet — the image may still be in flight. Hold the
+            # detection and let on_image complete the pair. Only aging out of
+            # this queue counts as a real drop.
+            self.pending[key] = msg
+            while len(self.pending) > self.pending_len:
+                self.pending.popitem(last=False)
+                self.n_drop += 1
             return
         self.n_hit += 1
+        self.try_render(key, frame, msg)
+
+    def try_render(self, key, frame, msg):
+        if self.last_rendered is not None and key < self.last_rendered:
+            self.n_stale += 1
+            return
+        self.last_rendered = key
         self.render(frame.copy(), msg)
 
     def render(self, frame, msg):
@@ -152,12 +185,16 @@ class DetectionViewer(Node):
         elif self.n_det == 0:
             self.get_logger().warn("images but NO detections — is my_interfaces built from "
                                    "the SAME commit as the board?")
-        total = self.n_hit + self.n_miss
-        rate = (100.0 * self.n_hit / total) if total else 0.0
+        drawn = self.n_hit + self.n_late
+        total = drawn + self.n_drop + self.n_stale
+        rate = (100.0 * drawn / total) if total else 0.0
         self.get_logger().info(
-            f"img={self.n_img} det={self.n_det} join_hit={self.n_hit} "
-            f"miss={self.n_miss} ({rate:.0f}% joined)")
-        self.n_img = self.n_det = self.n_hit = self.n_miss = 0
+            f"img={self.n_img} det={self.n_det} drawn={drawn} "
+            f"(hit={self.n_hit} late={self.n_late}) "
+            f"drop={self.n_drop} stale={self.n_stale} pending={len(self.pending)} "
+            f"({rate:.0f}% joined)")
+        self.n_img = self.n_det = self.n_hit = self.n_late = 0
+        self.n_drop = self.n_stale = 0
 
 
 def main():
