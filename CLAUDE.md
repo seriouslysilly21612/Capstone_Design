@@ -19,7 +19,7 @@ The main pipeline separates into three distinct communication boundaries:
 2. **APU → RPU**: ROS2 pick decision and trajectory sent to RPU for robot control — **not yet implemented**
 3. **RPU → External Arm**: Ethernet protocol to Neuromeka Indy7 for trajectory execution — **not yet implemented**
 
-Current status: RealSense → DPU detection → 2D filtering → single-point 3D (reverse projection) → base-frame target on APU via ROS2 (~17 Hz, z verified). Detector is currently an SSD ADAS stand-in (car/bicycle/person), not the final pick-object model. Robot control layers (RPU bridge, Ethernet/EtherCAT trajectory protocol) not yet implemented.
+Current status: RealSense → DPU detection → 2D filtering → single-point 3D (reverse projection) → base-frame target on APU via ROS2 (15 Hz, E2E ~81 ms, z verified). The detector runs the **final pick-object model** — YOLOv3-tiny 6-class (apple / orange / banana / tennis_ball / mustard_bottle / person), INT8, trained and compiled for this DPU (the old SSD ADAS stand-in is retired). An RT kernel (`5.15.199-rt91-rt-kv260c`) is built and verified. Robot control layers (RPU bridge, Ethernet/EtherCAT trajectory protocol) not yet implemented — that is the next track.
 
 ## Current Implementation Snapshot — Perception (APU)
 
@@ -35,7 +35,7 @@ Active nodes / files / output topics (camera → 3D pick target):
 | Node | File | Output topic |
 |---|---|---|
 | `camera` (realsense2_camera) | config: `system_bringup_pkg/config/realsense_pick_place.yaml` | color / depth / camera_info / extrinsics |
-| `vitis_ai_detector_node` (+ `vitis_ai_worker.py`) | `vitis_ai_detector_pkg/vitis_ai_detector_pkg/` | `/detections` (`DetectionArray`) |
+| `vitis_ai_detector_node` (+ `vitis_ai_worker_yolo.py`) | `vitis_ai_detector_pkg/vitis_ai_detector_pkg/` | `/detections` (`DetectionArray`) |
 | `pick_logic_node` | `pick_logic_pkg/pick_logic_pkg/pick_logic.py` | `/pick_target` (`PickTarget`) |
 | `pick_target_3d_node` | `target_3d_pkg/target_3d_pkg/pick_target_3d_node.py` | `/pick_target_3d` (`camera_depth_optical_frame`) |
 | `base_to_camera_tf` (static TF, **placeholder**) | launch argument | `/tf_static` |
@@ -44,12 +44,14 @@ Active nodes / files / output topics (camera → 3D pick target):
 Node parameters live in `system_bringup_pkg/config/*.yaml` (one per node). Custom messages are in `my_interfaces` (`Detection`, `DetectionArray`, `PickTarget`, `PickTarget3D`).
 
 **Detailed docs (read these before changing perception):**
-- `workflow.md` — node-by-node walkthrough, each parameter's value + rationale, the preprocessing/postprocessing techniques, and the pipeline architecture.
-- `progress.md` — full chronological history (decisions, measurements, root-cause fixes).
-- `yolov3_tiny_execution_plan.md` — confirmed model-swap plan (YOLOv3-tiny 7-class): dataset sourcing (synthetic + public datasets only; **no real-environment training images** by user decision 2026-07-06), UG1414 v2.5-grounded quantize/compile commands, phase gates. Direction doc: `yolov3_tiny_plan.md`.
+- `docs/STATUS.md` — **start here.** Integration hub + the canonical routing table for every other doc.
+- `docs/vision/workflow.md` — node-by-node walkthrough, each parameter's value + rationale, the preprocessing/postprocessing techniques, and the pipeline architecture.
+- `docs/vision/vision_final.md` — the whole vision track end to end: SSD→YOLO swap, training, the Vitis-AI quantize/compile flow onto the DPU, and every pipeline optimization with its measured delta.
+- `docs/history.md` — full chronological history (decisions, measurements, root-cause fixes).
+- `docs/vision/yolov3_tiny_execution_plan.md` — the model-swap plan as executed (dataset sourcing, UG1414 v2.5-grounded quantize/compile commands, phase gates). Historical: it says "7-class" and assumes synthetic-only data; both changed during execution (peach dropped → 6-class; real images added at D12/D14). `vision_final.md` is the accurate account.
 
-**Key perception facts (see `workflow.md` for detail):**
-- Detection runs in a **long-running worker process** (`vitis_ai_worker.py`); process isolation fixed a VART `execute_async` segfault. The detector↔worker boundary is a **model-agnostic JSON contract** (swapping the model touches only the worker's preprocessing constants + decode).
+**Key perception facts (see `docs/vision/workflow.md` for detail):**
+- Detection runs in a **long-running worker process** (`vitis_ai_worker_yolo.py`); process isolation fixed a VART `execute_async` segfault. The detector↔worker boundary is a **model-agnostic JSON contract** (swapping the model touches only the worker's preprocessing constants + decode).
 - **Preprocess = LUT**, **postprocess = background pre-filter** — both verified **bit-identical** to the naive version, large speedups.
 - **Callback pipelining**: the subscription callback only stores the newest frame; a worker thread consumes frames back-to-back.
 - **3D = single-point reverse projection** on raw depth (`align_depth` OFF); only the bbox-center pixel is matched to its depth pixel.
@@ -101,14 +103,14 @@ When selecting models or approaches for the vision pipeline:
 
 When answering user questions, **always**:
 
-1. **Check topic-specific markdown files first**: Before researching externally, look for a matching topic markdown file in `/home/ubuntu/ros2_ws/site_md/` directory
+1. **Check topic-specific markdown files first**: Before researching externally, look for a matching topic markdown file in the `docs/reference/` directory
 2. **Read the markdown file**: Extract all reference URLs and documentation links from the relevant topic file
 3. **Consult the referenced sites**: Use the links in the markdown to find specific, up-to-date information
 4. **Ground your answer in those sources**: When answering, cite the markdown file and the official sources it references
 
 **Topic file lookup strategy**:
 - Identify the dominant topic in the user's question
-- Search for a matching markdown file in `site_md/`:
+- Search for a matching markdown file in `docs/reference/`:
   - `reference_01_kria_core_architecture.md` — KV260, Zynq UltraScale+, APU/RPU/PL architecture
   - `reference_02_openamp_freertos_ethernet.md` — OpenAMP, FreeRTOS, RPU firmware, Ethernet control
   - `reference_03_vitis_ai_vision.md` — Vitis AI, vision models, inference deployment, quantization
@@ -135,20 +137,24 @@ If uncertain or sources disagree: state the disagreement, cite both sources, and
 - **OS**: Ubuntu 22.04 LTS (or PetaLinux if required)
 - **ROS2**: Humble
 - **Accelerator**: `kv260-smartcam` overlay; DPU `DPUCZDX8G_ISA1_B3136` (fingerprint `0x101000016010406`), Vitis-AI runtime/library 2.5.0. Boot auto-load via a `kv260-smartcam.service` systemd unit.
-- **Camera**: realsense2_camera v4.57.7 / librealsense 2.57.7; D435i FW 5.16.0.1; color & depth both 848×480×30, `align_depth` OFF.
-- **Current model**: `ssd_adas_pruned_0_95` (480×360 SSD, classes car/bicycle/person) — **stand-in**, not the final pick model.
+- **Camera**: realsense2_camera v4.57.7 / librealsense 2.57.7; D435i FW **5.17.0.10**; color & depth both 848×480×30, `align_depth` OFF.
+  - ⚠️ **Do not use FW 5.16.0.1** — RGB frames stop after tens of seconds of streaming (`docs/history.md` §13 has the split-diagnosis method and the fix).
+- **Current model**: YOLOv3-tiny 6-class INT8 — apple / orange / banana / tennis_ball / mustard_bottle / person. Ships inside the package at `src/vitis_ai_detector_pkg/models/yolov3_tiny_7class.xmodel` (the `7class` in the filename is a leftover from the initial 7-class run; peach was dropped at D13. `decode_meta.json`, which must stay in the same directory, is authoritative).
+- **RT kernel**: `5.15.199-rt91-rt-kv260c` — production, DEBUG off, radix + zocl fixes applied. Needed only for the EtherCAT track; the vision pipeline runs fine on the stock kernel.
 - **Tools**: Vivado/Vitis/Vitis AI → match target task & official support matrix.
 - **Avoid breaking changes**: Prefer stable, board-validated versions over "latest" unless specifically required.
 
 ## Known Gaps & TODOs
 
 - [x] Unified bringup launch + YAML config (`pick_place_vitis_ai.launch.py`)
-- [x] Real DPU detector running (SSD ADAS stand-in) replacing the mock detector
+- [x] Real DPU detector replacing the mock detector
 - [x] 2D pick-logic filtering (confidence / class / edge / bbox-size)
 - [x] 3D localization via single-point reverse projection (`align_depth` off)
-- [ ] Final pickable-object detector for B3136 (YCB/custom; `ssd_adas` is a stand-in)
-- [ ] Camera-to-base calibration (`base_link → camera_link` TF is a placeholder)
-- [ ] RPU firmware + APU↔RPU bridge (`apu_rpu_bridge_pkg`) + Indy7 Ethernet/EtherCAT control
+- [x] Final pickable-object detector for B3136 — YOLOv3-tiny 6-class INT8, mAP@0.5 0.766 (`docs/vision/vision_final.md`)
+- [x] Pipeline CPU optimization — 76.8% → ~44% (−1.25 core), lossless
+- [x] RT kernel `5.15.199-rt91-rt-kv260c` built + verified (`docs/rt/rt_final.md`)
+- [ ] Camera-to-base calibration (`base_link → camera_link` TF is a placeholder) — **blocks real robot coordinates**
+- [ ] RPU firmware + APU↔RPU bridge + Indy7 Ethernet/EtherCAT control ← **next track**
 - [ ] Custom PL acceleration beyond the vendor DPU (e.g. pre/post-processing or a custom bitstream). NOTE: the `kv260-smartcam` DPU already accelerates the NN inference in PL.
 
 ## Communication Style

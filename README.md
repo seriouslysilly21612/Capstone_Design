@@ -72,7 +72,7 @@ fingerprint가 다르면 이 모델(xmodel)은 **로드되지 않습니다**. �
 sudo apt install ros-humble-librealsense2 ros-humble-realsense2-camera
 ```
 
-**펌웨어 5.16.0.1은 쓰지 마세요.** 스트리밍 수십 초 후 RGB가 멈추는 버그가 있습니다(원인·진단법: `progress.md` §13). 5.17.0.10으로 업데이트:
+**펌웨어 5.16.0.1은 쓰지 마세요.** 스트리밍 수십 초 후 RGB가 멈추는 버그가 있습니다(원인·진단법: `docs/history.md` §13). 5.17.0.10으로 업데이트:
 
 ```bash
 wget https://librealsense.intel.com/Releases/RS4xx/FW/D4XX_FW_Image-5.17.0.10.bin
@@ -88,17 +88,16 @@ cd ~/ros2_ws/src
 git clone -b 4.57.7 https://github.com/IntelRealSense/realsense-ros.git
 ```
 
-### 5. DDS 설정 (성능에 직결 — 빠뜨리면 CPU +6.6%p)
+### 5. DDS 설정 — **할 일 없음** (2026-07-15부터 자동)
 
-노드 간 1.16 MB Image를 UDP loopback이 아니라 **shared memory**로 보냅니다. `~/.bashrc`에 추가:
+노드 간 1.16 MB Image를 UDP loopback이 아니라 **shared memory**로 보냅니다. 이 배선은 launch 파일이 직접 합니다(`RMW_IMPLEMENTATION` + `FASTRTPS_DEFAULT_PROFILES_FILE`을 `SetEnvironmentVariable`로 주입, XML은 `system_bringup_pkg/config/fastdds_shm_profile.xml`에서 `FindPackageShare`로 해석). **`~/.bashrc`에 아무것도 넣지 마세요** — 셸이 launch를 이기고, 절대경로는 다른 머신에서 깨집니다.
 
+동작 확인 (파이프라인 가동 중):
 ```bash
-export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-export FASTRTPS_DEFAULT_PROFILES_FILE=/home/ubuntu/ros2_ws/fastdds_shm_profile.xml
+ls -la /dev/shm/ | awk '$5 > 16000000'   # 16 MB 세그먼트가 노드 수(6개)만큼 보이면 정상
 ```
 
-확인: `env | grep FASTRTPS`.
-빠뜨려도 **에러 없이 동작**하지만 CPU를 6.6%p 더 씁니다. (기본 SHM segment가 512 KB라 1.16 MB Image가 안 들어가서 UDP로 조용히 폴백 — 그래서 프로파일 XML이 필요합니다.)
+왜 16 MB인가: 기본 SHM segment가 512 KB라 1.16 MB Image가 안 들어가고 **에러 없이 조용히 UDP로 폴백**합니다(CPU +6.6%p). 그래서 프로파일 XML이 필요합니다.
 
 ### 6. RT 커널 (선택 — EtherCAT 로봇제어 단계에서만)
 
@@ -106,26 +105,41 @@ export FASTRTPS_DEFAULT_PROFILES_FILE=/home/ubuntu/ros2_ws/fastdds_shm_profile.x
 
 - 최종 커널: `5.15.199-rt91-rt-kv260c`
 - 필수 패치 2개가 이 저장소에 있습니다:
-  - `kernel_configs/vanilla-5.15.199-radix-fix/` — Ubuntu SAUCE radix-tree revert 되돌리기 (없으면 RT에서 부팅 중 위반 253건)
-  - `zocl_patches/apply_zocl_uaf_fix.py` — zocl KDS use-after-free (없으면 DPU 가동 ~30초 후 커널 crash)
-- 전체 절차: `rt_patch.md`, 사건 기록: `rt_kernel_postmortem.md`
+  - `tools/kernel_patches/radix-fix/` — Ubuntu SAUCE radix-tree revert 되돌리기 (없으면 RT에서 부팅 중 위반 253건)
+  - `tools/kernel_patches/zocl/apply_zocl_uaf_fix.py` — zocl KDS use-after-free (없으면 DPU 가동 ~30초 후 커널 crash)
+- 전체 절차: `docs/rt/rt_patch.md`, 사건 기록: `docs/rt/rt_kernel_postmortem.md`
+- 검증 하네스: `tools/rt/` (`cyclic_rt.sh` 지연 측정, `soak_rt.sh` 소크 테스트 → 결과는 `evidence/crash_logs/`)
 
 ---
 
-## 문서 지도
+## 저장소 구조
+
+```
+README.md          ← 여기
+CLAUDE.md          에이전트용 프로젝트 컨텍스트
+src/               ROS 2 패키지 (colcon 규약상 위치 고정)
+docs/              문서 — STATUS.md가 허브
+tools/             실행하는 것 (rt/ 측정·소크, kernel_patches/ 커널 패치)
+evidence/          들여다보는 것 (crash_logs/ metrics/ kernel_configs/ node_graph/)
+yolo_v3_tiny_training/   모델 재생산 경로 (학습→양자화→컴파일)
+```
+
+> ⚠️ `docs/` 안 문서들의 **본문에 적힌 경로는 개편 전 기준**입니다(예: `crash_logs/…`는 지금 `evidence/crash_logs/…`). 위 표에서 파일 위치를 찾으세요. 문서 본문은 히스토리 기록이라 일부러 손대지 않았습니다.
 
 | 문서 | 내용 |
 |---|---|
-| `integrated_progress.md` | **여기부터** — 통합 허브 + 정본 라우팅 표 |
-| `workflow.md` | 노드별 파라미터와 **그 값의 근거** |
-| `vision_final.md` | 비전 모델 전체 (SSD→YOLO 학습·DPU 배포·최적화) |
-| `rt_patch.md` / `rt_kernel_postmortem.md` | RT 커널 구축 / 크래시 규명 |
-| `progress.md` | 시간순 전체 히스토리 |
+| `docs/STATUS.md` | **여기부터** — 통합 허브 + 정본 라우팅 표 |
+| `docs/vision/workflow.md` | 노드별 파라미터와 **그 값의 근거** |
+| `docs/vision/vision_final.md` | 비전 모델 전체 (SSD→YOLO 학습·DPU 배포·최적화) |
+| `docs/rt/rt_patch.md` / `docs/rt/rt_kernel_postmortem.md` | RT 커널 구축 / 크래시 규명 |
+| `docs/history.md` | 시간순 전체 히스토리 |
+| `docs/onboarding.md` | 처음 붙는 사람용 안내 |
+| `docs/reference/` | 주제별 공식문서 링크 모음 |
 
 ---
 
 ## 알아둘 것
 
-- **모델**: `vitis_ai_work/models/yolov3_tiny_7class.xmodel` — 파일명은 `7class`지만 실제는 **6-class**(apple/orange/banana/tennis_ball/mustard_bottle/person). `decode_meta.json`과 **반드시 같은 디렉터리**에 있어야 합니다(worker가 xmodel 옆에서 자동 탐색).
+- **모델**: `src/vitis_ai_detector_pkg/models/yolov3_tiny_7class.xmodel` — 파일명은 `7class`지만 실제는 **6-class**(apple/orange/banana/tennis_ball/mustard_bottle/person). `decode_meta.json`과 **반드시 같은 디렉터리**에 있어야 합니다(worker가 xmodel 옆에서 자동 탐색). 모델이 패키지 안에 동봉돼 있어 launch가 `FindPackageShare`로 찾습니다 — **경로를 손볼 필요가 없습니다.**
 - **`base_link → camera_link` TF는 placeholder**입니다. 캘리브레이션 전까지 `/pick_target_base`는 파이프라인이 동작함을 증명할 뿐, 실제 로봇 좌표가 아닙니다.
 - **rclpy에서 노드를 병합하지 마세요.** 시도했다가 CPU +5.4pt 역효과를 실측했습니다(rclpy executor가 매 콜백마다 waitset을 재구성). 근거와 코드: `target_3d_pkg/pick_post_stack.py`.
