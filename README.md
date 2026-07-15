@@ -16,21 +16,51 @@ ROS 2 Humble, 15 Hz, E2E ~81 ms.
 
 ---
 
-## 실행
+## 빌드 (최초 1회)
 
 ```bash
 source /opt/ros/humble/setup.bash
 cd ~/ros2_ws && colcon build --symlink-install    # --symlink-install 필수
 source install/setup.bash
+```
 
+## 실행 — 두 가지 모드
+
+### A. 파이프라인만 (프로덕션)
+
+**보드**:
+```bash
+source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash
 ros2 launch system_bringup_pkg pick_place_vitis_ai.launch.py
 ```
+데스크톱: **할 것 없음.**
 
 확인 (다른 터미널):
 ```bash
 ros2 topic hz /detections        # ~15 Hz
 ros2 topic hz /pick_target_base  # 최종 단계까지 흐르는지
 ```
+
+### B. 데스크톱에서 bbox overlay 보기
+
+3D·pick 노드가 빠져서 **보드 부하가 오히려 줄어듭니다** (1.8 → 0.79 core).
+
+**보드**:
+```bash
+source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash
+ros2 launch system_bringup_pkg viewing.launch.py
+```
+
+**데스크톱**:
+```bash
+source /opt/ros/humble/setup.bash && source ~/pp_ws/viewer_ws/install/setup.bash
+ros2 run detection_viewer_pkg detection_viewer_node
+```
+`q` 또는 `ESC`로 종료. 설정할 환경변수는 **없습니다** (양쪽 기본값이 이미 맞음).
+
+> **A + 뷰어를 같이** 쓸 수도 있습니다 — 보드에서 `pick_place_vitis_ai.launch.py`를 띄운 채 데스크톱 뷰어를 붙이면 3D까지 돌면서 화면도 나옵니다. 다만 이때는 color가 30 fps라 JPEG 인코딩이 2배(쓰는 건 절반)이고 3D 노드도 켜져 있어 **보드 부하는 B보다 큽니다.**
+
+**전제** (최초 1회): 보드에 `sudo apt install ros-humble-compressed-image-transport`, 데스크톱에 `my_interfaces` + `detection_viewer_pkg` 빌드. 전체 절차·게이트·함정: `docs/vision/desktop_viewer_plan.md`
 
 > `build/`와 `install/`은 `--symlink-install`로 서로 묶여 있습니다. **하나만 지우면 링크가 깨집니다** — 지울 때는 항상 둘 다 지우고 재빌드하세요.
 
@@ -79,14 +109,11 @@ wget https://librealsense.intel.com/Releases/RS4xx/FW/D4XX_FW_Image-5.17.0.10.bi
 rs-fw-update -f D4XX_FW_Image-5.17.0.10.bin
 ```
 
-### 4. realsense-ros 소스 (저장소에 없음)
+### 4. realsense-ros — **clone하지 않아도 됩니다**
 
-`src/realsense-ros`는 third-party라 gitignore돼 있습니다. 별도로 클론하세요:
+3번의 `apt install`로 끝입니다. `src/realsense-ros`가 있어도 **`COLCON_IGNORE`가 있어 빌드되지 않으며**(`install/`에 없음), 실제로 돌아가는 건 apt 패키지 `ros-humble-realsense2-camera` 4.57.7입니다. 소스 트리는 **읽기용 참조**일 뿐이라 clone은 선택입니다(코드를 들여다볼 때만).
 
-```bash
-cd ~/ros2_ws/src
-git clone -b 4.57.7 https://github.com/IntelRealSense/realsense-ros.git
-```
+> ⚠️ 그래서 `src/realsense-ros`를 **고쳐도 런타임은 안 바뀝니다.** `colcon build`는 성공했다고 말하지만 그 트리는 애초에 빌드 대상이 아닙니다.
 
 ### 5. DDS 설정 — **할 일 없음** (2026-07-15부터 자동)
 
@@ -132,6 +159,7 @@ yolo_v3_tiny_training/   모델 재생산 경로 (학습→양자화→컴파일
 | `docs/vision/workflow.md` | 노드별 파라미터와 **그 값의 근거** |
 | `docs/vision/vision_final.md` | 비전 모델 전체 (SSD→YOLO 학습·DPU 배포·최적화) |
 | `docs/rt/rt_patch.md` / `docs/rt/rt_kernel_postmortem.md` | RT 커널 구축 / 크래시 규명 |
+| `docs/vision/desktop_viewer_plan.md` | 데스크톱 bbox 뷰어 (✅ 완료) |
 | `docs/history.md` | 시간순 전체 히스토리 |
 | `docs/onboarding.md` | 처음 붙는 사람용 안내 |
 | `docs/reference/` | 주제별 공식문서 링크 모음 |

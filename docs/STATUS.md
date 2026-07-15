@@ -60,23 +60,32 @@ Detect objects via vision → compute 3D pick position → generate robot trajec
 
 새 세션은 **작업할 트랙의 정본 문서**를 이 통합본과 함께 열어라. 무작정 grep 하지 말 것.
 
+> ⚠️ **2026-07-15 구조 개편으로 경로가 바뀌었다.** 아래 표는 새 경로다. 단 **각 문서의 *본문*에 적힌 경로는 개편 전 기준**(예: `crash_logs/…` → 지금은 `evidence/crash_logs/…`)이며, 히스토리 기록물이라 일부러 고치지 않았다. 파일 위치는 이 표에서 찾아라. 개편 판단의 근거: `docs/analyses/cleanup_plan.md` §7.
+
 | 주제 | 정본 문서 | 성격 |
 |---|---|---|
-| 시스템 전체 규칙·소통 | `CLAUDE.md` | 항상 우선 |
-| 파이프라인 상세(노드별 파라미터·기법) | `workflow.md` | 비전 변경 전 필독 |
-| 시간순 히스토리(결정·측정·root-cause) | `progress.md` | 과거 경위 추적 |
-| **비전 YOLO — 명령어·게이트** | `yolov3_tiny_execution_plan.md` | Phase 0~7 / Gate 0~7, 맨 아래 **"D13 결과 / D14"**가 재개점 |
-| 비전 YOLO — 논리 서사 | `yolo_v3_process.md` | 맥락 복구 |
-| 3D 역투영 원리 | `reprojection.md` | 단일점 reverse projection |
-| **RT 커널 — 인수인계 정본** | `rt_patch.md` | RT 커널 전 과정·함정·복구(정정 이력 겹겹) |
-| **RT 크래시 — 종합 보고서** | `rt_kernel_postmortem.md` | 사건 전체를 깨끗한 서사로(증상→오진→진단→원인→해결→교훈→빌드함정). **RT 문제는 여기부터** |
-| RT 크래시 — 진단 상세·전략 | `rt_kernel_fix_plan.md` | 원인 규명 과정·근거 링크·전략 비교 |
-| **RPU/EtherCAT — 새 세션 진입점** | `rpu_guide_for_claude.md` | RPU 작업이면 **여기부터**(함정 지도) |
-| RPU 실행 계획(Gate 1~5) | `rpu_freertos_soem_execution_plan.md` | 명령어·게이트 |
-| RPU 논리 전개 | `rpu_plan.md` | 왜 이 선택인가 |
-| 온보딩/인수인계 | `inst_claude.md` | 30초 요약·트랙 확인 |
-| 지속 메모리 | `~/.claude/projects/-home-ubuntu/memory/MEMORY.md` | `kria-rt-preempt-project`, `yolov3-vision-swap-resume` |
-| 토픽별 공식 문서 링크 | `site_md/reference_0X_*.md` | 외부 조사 전 확인 |
+| 시스템 전체 규칙·소통 | `CLAUDE.md` (루트) | 항상 우선 |
+| 실행법·전제조건·저장소 구조 | `README.md` (루트) | **처음 보는 사람은 여기부터** |
+| 파이프라인 상세(노드별 파라미터·기법) | `docs/vision/workflow.md` | 비전 변경 전 필독 |
+| 시간순 히스토리(결정·측정·root-cause) | `docs/history.md` ← *구 progress.md* | 과거 경위 추적 |
+| **비전 전체 — 학습→DPU 배포→최적화** | `docs/vision/vision_final.md` | **비전 트랙 종합 정본**(교수님 보고용). SSD→YOLO 전 과정 |
+| **비전 YOLO — 명령어·게이트** | `docs/vision/yolov3_tiny_execution_plan.md` | Phase 0~7 / Gate 0~7. 단 "7-class·합성데이터만"은 실행 중 바뀜(6-class·real 도입) → 정확한 서술은 `vision_final.md` |
+| 비전 YOLO — 논리 서사 | `docs/vision/yolo_v3_process.md` | 맥락 복구 |
+| **데스크톱 bbox 뷰어** | `docs/vision/desktop_viewer_plan.md` | ✅ 완료(2026-07-16). 보드는 압축만/그리기는 데스크톱 |
+| 3D 역투영 원리 | `docs/vision/reprojection.md` | 단일점 reverse projection |
+| **RT 커널 — 종합 정본** | `docs/rt/rt_final.md` | RT 트랙 결산(2026-07-15 종결) |
+| RT 커널 — 인수인계 상세 | `docs/rt/rt_patch.md` | 전 과정·함정·복구(정정 이력 겹겹) |
+| **RT 크래시 — 종합 보고서** | `docs/rt/rt_kernel_postmortem.md` | 증상→오진→진단→원인→해결→교훈. **RT 문제는 여기부터** |
+| RT 크래시 — 진단 상세·전략 | `docs/rt/rt_kernel_fix_plan.md` | 원인 규명 과정·근거 링크·전략 비교 |
+| **RPU/EtherCAT — 새 세션 진입점** | `docs/rpu/rpu_guide_for_claude.md` | RPU 작업이면 **여기부터**(함정 지도) |
+| RPU 실행 계획(Gate 1~5) | `docs/rpu/rpu_freertos_soem_execution_plan.md` | 명령어·게이트 |
+| RPU 논리 전개 | `docs/rpu/rpu_plan.md` | 왜 이 선택인가 |
+| 온보딩/인수인계 | `docs/onboarding.md` ← *구 inst_claude.md* | 30초 요약·트랙 확인 |
+| 의사결정 여정 | `docs/decision_journey.md` | 왜 그렇게 갔나 |
+| 분석·타당성 | `docs/analyses/` | `yolov8_vitisai35_feasibility.md`, `cleanup_plan.md` |
+| 지속 메모리 | `~/.claude/projects/-home-ubuntu/memory/MEMORY.md` | 세션 간 유지되는 사실 |
+| 토픽별 공식 문서 링크 | `docs/reference/reference_0X_*.md` ← *구 site_md/* | 외부 조사 전 확인 |
+| 실행 도구 / 증거 | `tools/` (rt 하네스, kernel_patches) / `evidence/` (crash_logs, metrics, kernel_configs) | 각각 "돌리는 것" / "보는 것" |
 
 ---
 
