@@ -1,3 +1,6 @@
+import os
+from glob import glob
+
 from setuptools import find_packages, setup
 
 package_name = 'vitis_ai_detector_pkg'
@@ -10,6 +13,11 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        # The DPU model ships with the package that loads it, so the launch file
+        # can resolve it via FindPackageShare instead of an absolute path.
+        # xmodel and decode_meta.json MUST stay in the same directory: the worker
+        # looks for the meta beside the xmodel.
+        (os.path.join('share', package_name, 'models'), glob('models/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

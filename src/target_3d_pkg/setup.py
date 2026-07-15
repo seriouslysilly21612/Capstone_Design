@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
             'pick_target_3d_node = target_3d_pkg.pick_target_3d_node:main',
             'pick_target_base_node = target_3d_pkg.pick_target_base_node:main',
+            'pick_post_stack = target_3d_pkg.pick_post_stack:main',
         ],
     },
 )

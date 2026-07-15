@@ -1,20 +1,38 @@
 vitis_ai_detector_node:
   ros__parameters:
-    model_path: "/home/ubuntu/vitis_ai_work/smartcam_models/models/ssd_adas_pruned_0_95/ssd_adas_pruned_0_95.xmodel"
+    # 검출 모델 = YOLOv3-tiny 6-class (apple/orange/banana/tennis_ball/
+    # mustard_bottle/person). 파일명의 "7class"는 초기 7-class 시절 잔재이고
+    # 실제 배포본은 6-class(D14, md5 9bc6520c) — decode_meta.json이 정본.
+    #
+    # model_path / worker_script_path는 여기에 없다(2026-07-15):
+    #   - model_path       → launch가 FindPackageShare로 주입
+    #                        (vitis_ai_detector_pkg/models/ 에 동봉)
+    #   - worker_script_path → 노드가 자기 옆의 vitis_ai_worker_yolo.py 사용
+    # 둘 다 머신마다 달라지는 절대경로였고, 이제 clone만으로 해결된다.
+    # 다른 모델을 쓰려면 여기에 model_path를 적으면 launch 주입을 덮어쓴다.
+    #
+    # SSD stand-in으로 되돌리려면 (검증용, 평상시 불필요):
+    #   model_path: "/home/ubuntu/vitis_ai_work/smartcam_models/models/ssd_adas_pruned_0_95/ssd_adas_pruned_0_95.xmodel"
+    #   worker_script_path: ".../vitis_ai_detector_pkg/vitis_ai_worker.py"
+    #   send_resized_input: true
     detector_mode: "worker"
-    script_path: "/home/ubuntu/vitis_ai_work/scripts/ssd_adas_oneshot_json.py"
-    worker_script_path: "/home/ubuntu/ros2_ws/src/vitis_ai_detector_pkg/vitis_ai_detector_pkg/vitis_ai_worker.py"
     worker_log_path: ""
-    worker_softmax: "auto"
-    send_resized_input: true
+    worker_softmax: "auto"           # yolo worker는 --softmax를 받되 무시 (호환용)
+    # letterbox를 worker가 직접 수행 → node는 원본 프레임을 그대로 전달해야 함
+    send_resized_input: false
     input_topic: "/camera/camera/color/image_raw"
     output_topic: "/detections"
     overlay_topic: "/vitis_ai_detector/overlay"
     overlay_width: 480
     overlay_height: 360
-    image_path: "/tmp/vitis_ai_latest.jpg"
-    json_path: "/tmp/vitis_ai_detections.json"
-    process_period_sec: 0.0
+    # Cap detection to every 2nd camera frame = stable 15 Hz (2026-07-14 CPU
+    # phase 1): the letterbox speedup raised the uncapped rate to ~19 Hz, which
+    # just spends the saved CPU on extra downstream frames; Gate6 target is
+    # 15 Hz. The gate must sit safely INSIDE one camera frame period and the
+    # next (33.3..66.6 ms) — 0.062 was borderline (arrival jitter made it skip
+    # to 3-frame cadence, ~13.8 Hz mean). 0.045 locks the 2-frame cadence.
+    # Set 0.0 to uncap (max throughput).
+    process_period_sec: 0.045
     timeout_sec: 10.0
     worker_startup_timeout_sec: 30.0
     publish_empty_detections: true
@@ -28,7 +46,9 @@ vitis_ai_detector_node:
     # Profiling only (OFF for production). To profile, set a path like
     # "/home/ubuntu/ros2_ws/metrics/vitis_ai_metrics.csv": per-frame timing is
     # buffered and written on shutdown. "" = disabled (no buffering / no I/O).
-    metrics_csv_path: "" # "type <path + filename.csv> to save log"
+
+    metrics_csv_path: ""
     # When metrics_csv_path is set, auto-collect this many seconds from the first
     # frame then write the CSV. 0 = until shutdown. (Ignored when path is "".)
-    metrics_duration_sec: 0
+    
+    metrics_duration_sec: 185.0

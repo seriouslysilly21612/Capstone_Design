@@ -13,6 +13,7 @@ import time
 import cv2
 import numpy as np
 import rclpy
+from ament_index_python.packages import get_package_share_directory
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy
 from rclpy.qos import HistoryPolicy
@@ -28,6 +29,27 @@ BOX_COLORS = {
     "bicycle": (255, 180, 0),
     "person": (0, 80, 255),
 }
+
+
+def _default_model_path():
+    """Installed share/ copy of the deployed model.
+
+    The model ships inside this package, so it resolves without any
+    /home/<user>/... assumption. The launch file passes the same path
+    explicitly; this default keeps a bare `ros2 run` working.
+    """
+    try:
+        share = get_package_share_directory("vitis_ai_detector_pkg")
+    except Exception:
+        return ""
+    return os.path.join(share, "models", "yolov3_tiny_7class.xmodel")
+
+
+def _default_worker_script_path():
+    """YOLO worker, which lives next to this file."""
+    return os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "vitis_ai_worker_yolo.py"
+    )
 
 
 def ros_image_to_bgr(msg):
@@ -78,18 +100,8 @@ class VitisAiDetectorNode(Node):
     def __init__(self):
         super().__init__("vitis_ai_detector_node")
 
-        self.declare_parameter(
-            "model_path",
-            "/home/ubuntu/vitis_ai_work/smartcam_models/models/ssd_adas_pruned_0_95/ssd_adas_pruned_0_95.xmodel",
-        )
-        self.declare_parameter(
-            "script_path",
-            "/home/ubuntu/vitis_ai_work/scripts/ssd_adas_oneshot_json.py",
-        )
-        self.declare_parameter(
-            "worker_script_path",
-            "/home/ubuntu/ros2_ws/src/vitis_ai_detector_pkg/vitis_ai_detector_pkg/vitis_ai_worker.py",
-        )
+        self.declare_parameter("model_path", _default_model_path())
+        self.declare_parameter("worker_script_path", _default_worker_script_path())
         self.declare_parameter("detector_mode", "worker")
         self.declare_parameter("worker_log_path", "")
         self.declare_parameter("worker_softmax", "auto")
@@ -99,8 +111,6 @@ class VitisAiDetectorNode(Node):
         self.declare_parameter("overlay_topic", "/vitis_ai_detector/overlay")
         self.declare_parameter("overlay_width", 480)
         self.declare_parameter("overlay_height", 360)
-        self.declare_parameter("image_path", "/tmp/vitis_ai_latest.jpg")
-        self.declare_parameter("json_path", "/tmp/vitis_ai_detections.json")
         self.declare_parameter("process_period_sec", 0.0)
         self.declare_parameter("timeout_sec", 10.0)
         self.declare_parameter("worker_startup_timeout_sec", 30.0)
@@ -118,7 +128,6 @@ class VitisAiDetectorNode(Node):
         self.declare_parameter("metrics_duration_sec", 0.0)
 
         self.model_path = self.get_parameter("model_path").value
-        self.script_path = self.get_parameter("script_path").value
         self.worker_script_path = self.get_parameter("worker_script_path").value
         self.detector_mode = str(self.get_parameter("detector_mode").value)
         self.worker_log_path = self.get_parameter("worker_log_path").value
@@ -131,8 +140,6 @@ class VitisAiDetectorNode(Node):
         self.overlay_topic = self.get_parameter("overlay_topic").value
         self.overlay_width = int(self.get_parameter("overlay_width").value)
         self.overlay_height = int(self.get_parameter("overlay_height").value)
-        self.image_path = self.get_parameter("image_path").value
-        self.json_path = self.get_parameter("json_path").value
         self.process_period_sec = float(self.get_parameter("process_period_sec").value)
         self.timeout_sec = float(self.get_parameter("timeout_sec").value)
         self.worker_startup_timeout_sec = float(
@@ -215,10 +222,12 @@ class VitisAiDetectorNode(Node):
             image_qos,
         )
 
-        if self.detector_mode == "worker":
-            self.start_worker()
-        elif self.detector_mode != "oneshot":
-            raise RuntimeError(f"Unsupported detector_mode: {self.detector_mode}")
+        if self.detector_mode != "worker":
+            raise RuntimeError(
+                f"Unsupported detector_mode: {self.detector_mode!r} "
+                "(only 'worker' is supported)"
+            )
+        self.start_worker()
 
         self.worker_thread = threading.Thread(
             target=self.worker_loop, name="vitis_ai_worker_loop", daemon=True
@@ -272,10 +281,7 @@ class VitisAiDetectorNode(Node):
             image = ros_image_to_bgr(msg)
             image_ready_ns = time.perf_counter_ns()
 
-            if self.detector_mode == "worker":
-                detections = self.detect_with_worker(image)
-            else:
-                detections = self.detect_with_oneshot(image)
+            detections = self.detect_with_worker(image)
             detection_done_ns = time.perf_counter_ns()
 
             out_msg = DetectionArray()
@@ -569,42 +575,6 @@ class VitisAiDetectorNode(Node):
 
         self.last_worker_timing = response.get("timing")
         return self.json_items_to_detections(response.get("detections", []))
-
-    def detect_with_oneshot(self, image):
-        if not cv2.imwrite(self.image_path, image):
-            raise RuntimeError(f"Failed to write image: {self.image_path}")
-
-        command = [
-            sys.executable,
-            self.script_path,
-            "--model",
-            self.model_path,
-            "--image",
-            self.image_path,
-            "--json-output",
-            self.json_path,
-        ]
-
-        result = subprocess.run(
-            command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=self.timeout_sec,
-        )
-
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"one-shot worker failed: returncode={result.returncode}, stderr={result.stderr}"
-            )
-
-        return self.load_detections_json()
-
-    def load_detections_json(self):
-        with open(self.json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        return self.json_items_to_detections(data.get("detections", []))
 
     def json_items_to_detections(self, items):
         detections = []

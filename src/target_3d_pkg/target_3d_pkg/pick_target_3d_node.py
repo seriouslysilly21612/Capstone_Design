@@ -10,7 +10,6 @@ from rclpy.qos import (
     ReliabilityPolicy,
 )
 
-from cv_bridge import CvBridge
 from sensor_msgs.msg import Image, CameraInfo
 from realsense2_camera_msgs.msg import Extrinsics
 
@@ -33,20 +32,14 @@ def project(fx, fy, cx, cy, point):
     return point[0] * fx / z + cx, point[1] * fy / z + cy
 
 
-def color_pixel_to_depth_pixel(
+def color_pixel_to_depth_pixel_loop(
     u_c, v_c, depth_img, depth_scale, dmin, dmax,
     d_fx, d_fy, d_cx, d_cy,
     c_fx, c_fy, c_cx, c_cy,
     R_cd, t_cd, R_dc, t_dc,
 ):
-    """Find the depth-image pixel that corresponds to color pixel (u_c, v_c).
-
-    This is the rs2_project_color_pixel_to_depth_pixel algorithm: the color
-    pixel back-projects to a ray; that ray maps to a line segment in the depth
-    image (between dmin and dmax). We walk that short segment and pick the depth
-    pixel whose own back-projection re-projects closest to (u_c, v_c) in color.
-    Returns (ui, vi) or None if no valid depth lies on the segment.
-    """
+    """Reference implementation (per-pixel Python loop). Kept only for the
+    epipolar_ab_check cross-validation of the vectorized version below."""
     # Segment endpoints in the depth image (color ray at dmin and dmax).
     p_min = R_cd @ deproject(c_fx, c_fy, c_cx, c_cy, u_c, v_c, dmin) + t_cd
     u_min, v_min = project(d_fx, d_fy, d_cx, d_cy, p_min)
@@ -82,6 +75,71 @@ def color_pixel_to_depth_pixel(
     return best
 
 
+def color_pixel_to_depth_pixel(
+    u_c, v_c, depth_img, depth_scale, dmin, dmax,
+    d_fx, d_fy, d_cx, d_cy,
+    c_fx, c_fy, c_cx, c_cy,
+    R_cd, t_cd, R_dc, t_dc,
+):
+    """Find the depth-image pixel that corresponds to color pixel (u_c, v_c).
+
+    This is the rs2_project_color_pixel_to_depth_pixel algorithm: the color
+    pixel back-projects to a ray; that ray maps to a line segment in the depth
+    image (between dmin and dmax); the depth pixel on that segment whose own
+    back-projection re-projects closest to (u_c, v_c) wins.
+
+    Vectorized over the whole segment (single fancy-index gather + one (3,N)
+    matmul). Numerically equivalent to the loop reference: np.rint matches
+    int(round()) (both round-half-to-even), mask order preserves the candidate
+    set, and argmin returns the first minimum like the loop's strict '<'.
+    Returns (ui, vi) or None if no valid depth lies on the segment.
+    """
+    p_min = R_cd @ deproject(c_fx, c_fy, c_cx, c_cy, u_c, v_c, dmin) + t_cd
+    u_min, v_min = project(d_fx, d_fy, d_cx, d_cy, p_min)
+    p_max = R_cd @ deproject(c_fx, c_fy, c_cx, c_cy, u_c, v_c, dmax) + t_cd
+    u_max, v_max = project(d_fx, d_fy, d_cx, d_cy, p_max)
+
+    h, w = depth_img.shape[:2]
+    steps = max(1, int(math.ceil(max(abs(u_max - u_min), abs(v_max - v_min)))))
+
+    a = np.arange(steps + 1, dtype=np.float64) / steps
+    ui = np.rint(u_min + (u_max - u_min) * a).astype(np.intp)
+    vi = np.rint(v_min + (v_max - v_min) * a).astype(np.intp)
+
+    ok = (ui >= 0) & (ui < w) & (vi >= 0) & (vi < h)
+    ui, vi = ui[ok], vi[ok]
+    if ui.size == 0:
+        return None
+
+    raw = depth_img[vi, ui]
+    z = raw.astype(np.float64) * depth_scale
+    ok = (raw != 0) & (z >= dmin) & (z <= dmax)
+    ui, vi, z = ui[ok], vi[ok], z[ok]
+    if ui.size == 0:
+        return None
+
+    # Back-project all candidates at once ((ui - cx) * z / fx: same op order
+    # as the scalar deproject) and map depth->color with one matmul.
+    pts = np.empty((3, ui.size), dtype=np.float64)
+    pts[0] = (ui - d_cx) * z / d_fx
+    pts[1] = (vi - d_cy) * z / d_fy
+    pts[2] = z
+    p_c = R_dc @ pts + t_dc[:, None]
+
+    ok = p_c[2] > 0
+    if not ok.all():
+        p_c = p_c[:, ok]
+        ui, vi = ui[ok], vi[ok]
+        if ui.size == 0:
+            return None
+
+    u_chk = p_c[0] * c_fx / p_c[2] + c_cx
+    v_chk = p_c[1] * c_fy / p_c[2] + c_cy
+    dist = (u_chk - u_c) ** 2 + (v_chk - v_c) ** 2
+    j = int(np.argmin(dist))
+    return int(ui[j]), int(vi[j])
+
+
 class PickTarget3DNode(Node):
     def __init__(self):
         super().__init__('pick_target_3d_node')
@@ -107,6 +165,10 @@ class PickTarget3DNode(Node):
         self.declare_parameter('min_depth_m', 0.05)
         self.declare_parameter('max_depth_m', 2.00)
         self.declare_parameter('log_period_sec', 1.0)
+        # Cross-check the vectorized epipolar search against the loop
+        # reference on every pick (costs the old loop time again) — turn off
+        # once live mismatch count stays 0.
+        self.declare_parameter('epipolar_ab_check', False)
 
         pick_target_topic = self.get_parameter('pick_target_topic').value
         depth_topic = self.get_parameter('depth_topic').value
@@ -122,15 +184,18 @@ class PickTarget3DNode(Node):
         self.min_depth_m = float(self.get_parameter('min_depth_m').value)
         self.max_depth_m = float(self.get_parameter('max_depth_m').value)
         self.log_period_sec = float(self.get_parameter('log_period_sec').value)
+        self.epipolar_ab_check = bool(
+            self.get_parameter('epipolar_ab_check').value
+        )
+        self.ab_checked = 0
+        self.ab_mismatch = 0
         self.last_warn_log_time_ns = {}
 
         # ===== Runtime state =====
-        self.bridge = CvBridge()
-
-        self.latest_depth_image = None
-        self.latest_depth_encoding = None
-        self.latest_depth_header = None
-        self.depth_eff_scale = None   # meters per unit, from encoding
+        # Depth arrives at stream rate but is consumed only at pick time —
+        # store the raw msg and build a zero-copy numpy view lazily.
+        self.latest_depth_msg = None
+        self._depth_view_checked = False
 
         # depth intrinsics
         self.d_fx = self.d_fy = self.d_cx = self.d_cy = None
@@ -180,31 +245,35 @@ class PickTarget3DNode(Node):
             PickTarget3D, output_topic, 10
         )
 
+        # Prune the static-value subscriptions shortly after startup (P2).
+        self.prune_timer = self.create_timer(1.0, self.prune_static_subs)
+
         self.get_logger().info(
             'pick_target_3d_node started (raw-depth reverse projection): '
             f'{pick_target_topic} + {depth_topic} -> {output_topic}'
         )
 
     def depth_callback(self, msg: Image):
-        try:
-            depth_image = self.bridge.imgmsg_to_cv2(
-                msg, desired_encoding='passthrough'
-            )
-            self.latest_depth_image = depth_image
-            self.latest_depth_encoding = msg.encoding
-            self.latest_depth_header = msg.header
-            if msg.encoding == '16UC1':
-                self.depth_eff_scale = self.depth_scale_16uc1
-            elif msg.encoding == '32FC1':
-                self.depth_eff_scale = 1.0
-            else:
-                self.depth_eff_scale = None
-                self.log_warn_throttled(
-                    'bad_depth_encoding',
-                    f'Unsupported depth encoding: {msg.encoding}',
-                )
-        except Exception as e:
-            self.get_logger().error(f'Failed to convert depth image: {e}')
+        # Store only — conversion/validation happens at pick time (~16 Hz),
+        # not at depth stream rate.
+        self.latest_depth_msg = msg
+
+    def depth_msg_to_view(self, msg):
+        """Zero-copy numpy view of a depth Image msg + meters-per-unit scale.
+
+        Equivalent to cv_bridge 'passthrough' (which is also a view when
+        step == width*itemsize); D435i is little-endian (is_bigendian=0).
+        Returns (depth_img, eff_scale) or (None, None) on bad encoding.
+        """
+        if msg.encoding == '16UC1':
+            img = np.frombuffer(msg.data, dtype=np.dtype('<u2')).reshape(
+                msg.height, msg.step // 2)[:, :msg.width]
+            return img, self.depth_scale_16uc1
+        if msg.encoding == '32FC1':
+            img = np.frombuffer(msg.data, dtype=np.dtype('<f4')).reshape(
+                msg.height, msg.step // 4)[:, :msg.width]
+            return img, 1.0
+        return None, None
 
     def depth_info_callback(self, msg: CameraInfo):
         self.d_fx = float(msg.k[0])
@@ -227,6 +296,29 @@ class PickTarget3DNode(Node):
         self.t_dc = t
         self.R_cd = R.T            # color -> depth (inverse rotation)
         self.t_cd = -R.T @ t
+
+    def prune_static_subs(self):
+        """Drop camera_info/extrinsics subscriptions once their (static)
+        values arrived — realsense republishes them per frame (30 Hz x2) and
+        the per-message executor dispatch is pure waste after the first one.
+        Runs on a timer so we never destroy a subscription from inside its
+        own callback."""
+        if self.depth_info_sub and self.d_fx is not None:
+            self.destroy_subscription(self.depth_info_sub)
+            self.depth_info_sub = None
+        if self.color_info_sub and self.c_fx is not None:
+            self.destroy_subscription(self.color_info_sub)
+            self.color_info_sub = None
+        if self.extrinsics_sub and self.R_dc is not None:
+            self.destroy_subscription(self.extrinsics_sub)
+            self.extrinsics_sub = None
+        if (self.depth_info_sub is None and self.color_info_sub is None
+                and self.extrinsics_sub is None):
+            self.destroy_timer(self.prune_timer)
+            self.prune_timer = None
+            self.get_logger().info(
+                'Static camera_info/extrinsics captured — subscriptions pruned'
+            )
 
     def intrinsics_ready(self):
         return (
@@ -256,7 +348,8 @@ class PickTarget3DNode(Node):
             self.target_3d_pub.publish(out)
             return
 
-        if self.latest_depth_image is None or self.depth_eff_scale is None:
+        depth_msg = self.latest_depth_msg
+        if depth_msg is None:
             self.log_warn_throttled('no_depth_image', 'No depth image yet')
             self.target_3d_pub.publish(out)
             return
@@ -273,17 +366,55 @@ class PickTarget3DNode(Node):
             self.target_3d_pub.publish(out)
             return
 
-        depth_img = self.latest_depth_image
+        depth_img, eff_scale = self.depth_msg_to_view(depth_msg)
+        if depth_img is None:
+            self.log_warn_throttled(
+                'bad_depth_encoding',
+                f'Unsupported depth encoding: {depth_msg.encoding}',
+            )
+            self.target_3d_pub.publish(out)
+            return
+
+        if not self._depth_view_checked:
+            self._depth_view_checked = True
+            try:
+                from cv_bridge import CvBridge
+                ref = CvBridge().imgmsg_to_cv2(
+                    depth_msg, desired_encoding='passthrough')
+                self.get_logger().info(
+                    'depth frombuffer view == cv_bridge: '
+                    f'{bool(np.array_equal(ref, depth_img))} '
+                    f'(bigendian={depth_msg.is_bigendian})'
+                )
+            except Exception as e:
+                self.get_logger().warn(f'depth view check skipped: {e}')
+
         u_c = float(msg.center_x)
         v_c = float(msg.center_y)
 
-        found = color_pixel_to_depth_pixel(
-            u_c, v_c, depth_img, self.depth_eff_scale,
+        args = (
+            u_c, v_c, depth_img, eff_scale,
             self.min_depth_m, self.max_depth_m,
             self.d_fx, self.d_fy, self.d_cx, self.d_cy,
             self.c_fx, self.c_fy, self.c_cx, self.c_cy,
             self.R_cd, self.t_cd, self.R_dc, self.t_dc,
         )
+        found = color_pixel_to_depth_pixel(*args)
+
+        if self.epipolar_ab_check:
+            ref = color_pixel_to_depth_pixel_loop(*args)
+            self.ab_checked += 1
+            if ref != found:
+                self.ab_mismatch += 1
+                self.get_logger().warn(
+                    f'epipolar A/B mismatch: vec={found} loop={ref} '
+                    f'({self.ab_mismatch}/{self.ab_checked})'
+                )
+            elif self.ab_checked % 500 == 0:
+                self.get_logger().info(
+                    f'epipolar A/B: {self.ab_checked} checked, '
+                    f'{self.ab_mismatch} mismatches'
+                )
 
         if found is None:
             self.log_warn_throttled(
@@ -293,7 +424,7 @@ class PickTarget3DNode(Node):
             return
 
         ui, vi = found
-        z_m = self.get_depth_m_from_patch(depth_img, ui, vi)
+        z_m = self.get_depth_m_from_patch(depth_img, ui, vi, depth_msg.encoding)
         if z_m is None:
             self.log_warn_throttled(
                 'no_valid_depth_patch', 'No valid depth in patch around match'
@@ -304,11 +435,7 @@ class PickTarget3DNode(Node):
         # 3D point in the DEPTH optical frame.
         point = deproject(self.d_fx, self.d_fy, self.d_cx, self.d_cy, ui, vi, z_m)
 
-        if self.latest_depth_header is not None:
-            out.header = self.latest_depth_header
-        else:
-            out.header.stamp = self.get_clock().now().to_msg()
-            out.header.frame_id = self.depth_frame_id
+        out.header = depth_msg.header
         if out.header.frame_id == '':
             out.header.frame_id = self.depth_frame_id
 
@@ -319,7 +446,7 @@ class PickTarget3DNode(Node):
 
         self.target_3d_pub.publish(out)
 
-    def get_depth_m_from_patch(self, depth_img, u, v):
+    def get_depth_m_from_patch(self, depth_img, u, v, encoding):
         r = self.patch_radius
         u0 = max(0, u - r)
         u1 = min(depth_img.shape[1] - 1, u + r)
@@ -328,12 +455,12 @@ class PickTarget3DNode(Node):
 
         patch = depth_img[v0:v1 + 1, u0:u1 + 1]
 
-        if self.latest_depth_encoding == '16UC1':
+        if encoding == '16UC1':
             valid = patch[patch > 0].astype(np.float32)
             if valid.size == 0:
                 return None
             valid_m = valid * self.depth_scale_16uc1
-        elif self.latest_depth_encoding == '32FC1':
+        elif encoding == '32FC1':
             valid = patch[np.isfinite(patch) & (patch > 0)].astype(np.float32)
             if valid.size == 0:
                 return None

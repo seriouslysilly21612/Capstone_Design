@@ -26,6 +26,16 @@ def generate_launch_description():
         'vitis_ai_detector.yaml',
     ])
 
+    # The model ships inside vitis_ai_detector_pkg, so resolve it at runtime
+    # instead of hard-coding /home/<user>/... in the YAML (ROS parameter YAML
+    # expands neither ~ nor environment variables). decode_meta.json sits beside
+    # the xmodel in the same share/ dir — the worker finds it from there.
+    model_path = PathJoinSubstitution([
+        FindPackageShare('vitis_ai_detector_pkg'),
+        'models',
+        'yolov3_tiny_7class.xmodel',
+    ])
+
     pick_logic_config = PathJoinSubstitution([
         FindPackageShare('system_bringup_pkg'),
         'config',
@@ -56,10 +66,18 @@ def generate_launch_description():
             package='vitis_ai_detector_pkg',
             executable='vitis_ai_detector_node',
             name='vitis_ai_detector_node',
-            parameters=[vitis_ai_detector_config],
+            # model_path comes last so it overrides the YAML: it is a resolved
+            # path, not a tunable, and must not be edited per machine.
+            parameters=[vitis_ai_detector_config, {'model_path': model_path}],
             output='screen',
         ),
 
+        # NOTE(2026-07-14): merging these three nodes into one process
+        # (target_3d_pkg pick_post_stack) was tried and MEASURED SLOWER
+        # (+5.4pt: rclpy's executor rebuilds the wait-set over all entities
+        # per callback, so a 3-node process raises every callback's dispatch
+        # cost more than it saves in per-process/DDS overhead). Keep them
+        # as separate processes unless moving to rclcpp composition.
         Node(
             package='pick_logic_pkg',
             executable='pick_logic',

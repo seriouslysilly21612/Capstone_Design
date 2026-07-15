@@ -12,6 +12,14 @@ pick_target_3d_node:
 
     depth_scale_16uc1: 0.001
     patch_radius: 4
-    min_depth_m: 0.05
-    max_depth_m: 3.5
+    # Epipolar segment length ~ fx*baseline*(1/min - 1/max), dominated by min.
+    # D435i 848x480 physical min-z is ~0.195 m, and target_base gates to
+    # 0.20~1.50 m anyway — 0.05/3.5 walked a 6x longer segment for depths
+    # that cannot occur / would be rejected downstream. Widen BOTH together
+    # with target_base.yaml (min/max_camera_z_m) if the workspace grows.
+    min_depth_m: 0.19
+    max_depth_m: 1.6
     log_period_sec: 1.0
+    # Cross-check vectorized epipolar vs loop reference (costs the loop again).
+    # Validated live 2026-07-14: 4500 picks, 0 mismatches — keep off.
+    epipolar_ab_check: false

@@ -5,10 +5,15 @@ pick_logic_node:
 
     min_confidence: 0.3
 
+    # pick 대상 5종 (pickable). person은 검출은 되지만(=/detections에 나옴, 안전 인지용)
+    # pick 대상에서는 제외 — D8: person은 safety 트리거이지 집는 물체가 아님.
+    # peach 드롭됨 (D13, 2026-07-09).
     allowed_classes:
-      - "car"
-      - "bicycle"
-      - "person"  # 나중에 실제 Class 입력
+      - "apple"
+      - "orange"
+      - "banana"
+      - "tennis_ball"
+      - "mustard_bottle"
 
     # Must match rgb_camera.color_profile in realsense_pick_place.yaml.
     # The detector returns bbox coordinates in the source (camera) resolution,

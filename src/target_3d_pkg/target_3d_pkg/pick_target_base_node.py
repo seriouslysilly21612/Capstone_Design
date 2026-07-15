@@ -1,3 +1,5 @@
+import numpy as np
+
 import rclpy
 from rclpy.duration import Duration
 from rclpy.node import Node
@@ -7,6 +9,15 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from tf2_geometry_msgs import do_transform_point
 
 from my_interfaces.msg import PickTarget3D
+
+
+def quat_to_rotation_matrix(qx, qy, qz, qw):
+    """Unit quaternion -> 3x3 rotation matrix (same math as tf2)."""
+    return np.array([
+        [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
+        [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+        [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)],
+    ], dtype=np.float64)
 
 
 class PickTargetBaseNode(Node):
@@ -24,6 +35,11 @@ class PickTargetBaseNode(Node):
 
         self.declare_parameter('publish_invalid_targets', True)
         self.declare_parameter('log_period_sec', 1.0)
+        # base_link->camera TF is static (placeholder / fixed calibration):
+        # look it up once, cache (R, t), and transform with one matmul instead
+        # of a tf2 buffer lookup + do_transform_point per message. Set false
+        # if the TF ever becomes dynamic.
+        self.declare_parameter('static_tf_cache', True)
 
         input_topic = self.get_parameter('input_topic').value
         output_topic = self.get_parameter('output_topic').value
@@ -49,6 +65,10 @@ class PickTargetBaseNode(Node):
         self.log_period_sec = float(
             self.get_parameter('log_period_sec').value
         )
+        self.static_tf_cache = bool(
+            self.get_parameter('static_tf_cache').value
+        )
+        self._tf_cache = {}   # source frame_id -> (R 3x3, t 3)
         self.last_warn_log_time_ns = {}
 
         self.tf_buffer = Buffer()
@@ -97,6 +117,23 @@ class PickTargetBaseNode(Node):
             self.publish_invalid_if_enabled(out)
             return
 
+        # Fast path: cached static (R, t) — no tf2 lookup, one matmul.
+        cached = (
+            self._tf_cache.get(msg.header.frame_id)
+            if self.static_tf_cache else None
+        )
+        if cached is not None:
+            R, t = cached
+            p = R @ np.array(
+                [msg.x, msg.y, msg.z], dtype=np.float64) + t
+            out.target_valid = True
+            out.depth_valid = True
+            out.x = float(p[0])
+            out.y = float(p[1])
+            out.z = float(p[2])
+            self.pub.publish(out)
+            return
+
         point_in = PointStamped()
         point_in.header = msg.header
         point_in.point.x = float(msg.x)
@@ -122,6 +159,25 @@ class PickTargetBaseNode(Node):
             out.z = float(point_out.point.z)
 
             self.pub.publish(out)
+
+            if self.static_tf_cache:
+                q = transform.transform.rotation
+                tr = transform.transform.translation
+                R = quat_to_rotation_matrix(q.x, q.y, q.z, q.w)
+                t = np.array([tr.x, tr.y, tr.z], dtype=np.float64)
+                p = R @ np.array(
+                    [msg.x, msg.y, msg.z], dtype=np.float64) + t
+                diff = max(
+                    abs(p[0] - point_out.point.x),
+                    abs(p[1] - point_out.point.y),
+                    abs(p[2] - point_out.point.z),
+                )
+                self._tf_cache[msg.header.frame_id] = (R, t)
+                self.get_logger().info(
+                    f'Static TF cached ({msg.header.frame_id} -> '
+                    f'{self.target_frame}), matmul vs tf2 max diff '
+                    f'{diff:.3e} m'
+                )
 
         except TransformException as e:
             out.target_valid = False
