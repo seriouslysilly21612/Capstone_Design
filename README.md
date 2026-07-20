@@ -24,16 +24,16 @@ cd ~/ros2_ws && colcon build --symlink-install    # --symlink-install 필수
 source install/setup.bash
 ```
 
-## 실행 — 두 가지 모드
+## 실행
 
-### A. 파이프라인만 (프로덕션)
+파이프라인은 **launch 하나**입니다. 보고 싶을 때 데스크톱 뷰어를 붙이면 되고, 별도의 "뷰잉 전용" launch는 없습니다(2026-07-20 통합).
 
-**보드**:
+**보드** (항상 이거 하나):
 ```bash
 source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash
 ros2 launch system_bringup_pkg pick_place_vitis_ai.launch.py
 ```
-데스크톱: **할 것 없음.**
+카메라 → 검출 → pick_logic → 3D → base까지 전부 돕니다. 데스크톱: **할 것 없음.**
 
 확인 (다른 터미널):
 ```bash
@@ -41,24 +41,18 @@ ros2 topic hz /detections        # ~15 Hz
 ros2 topic hz /pick_target_base  # 최종 단계까지 흐르는지
 ```
 
-### B. 데스크톱에서 bbox overlay 보기
+### 데스크톱에서 bbox overlay로 관찰하기 (선택)
 
-3D·pick 노드가 빠져서 **보드 부하가 오히려 줄어듭니다** (1.8 → 0.79 core).
-
-**보드**:
-```bash
-source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash
-ros2 launch system_bringup_pkg viewing.launch.py
-```
-
-**데스크톱**:
+파이프라인을 **바꾸지 않습니다.** 위 launch를 보드에서 그대로 돌린 채, 데스크톱에서 뷰어만 붙입니다:
 ```bash
 source /opt/ros/humble/setup.bash && source ~/pp_ws/viewer_ws/install/setup.bash
 ros2 run detection_viewer_pkg detection_viewer_node
 ```
 `q` 또는 `ESC`로 종료. 설정할 환경변수는 **없습니다** (양쪽 기본값이 이미 맞음).
 
-> **A + 뷰어를 같이** 쓸 수도 있습니다 — 보드에서 `pick_place_vitis_ai.launch.py`를 띄운 채 데스크톱 뷰어를 붙이면 3D까지 돌면서 화면도 나옵니다. 다만 이때는 color가 30 fps라 JPEG 인코딩이 2배(쓰는 건 절반)이고 3D 노드도 켜져 있어 **보드 부하는 B보다 큽니다.**
+- 보드는 **JPEG 압축만**, 그리기는 전부 데스크톱에서 합니다.
+- 압축 스트림 `/camera/camera/color/image_raw/compressed`는 **뷰어가 붙을 때만 인코딩**됩니다(image_transport lazy). 아무도 안 보면 인코딩 비용 0 → 평상시 파이프라인엔 **부담이 없습니다.** 그래서 뷰잉 전용 launch가 애초에 불필요했습니다.
+- 보는 동안엔 color 30 fps 인코딩이 detection(15 Hz)보다 2배라 절반은 버려지지만, 이건 **관찰하는 동안만의 비용**이고 뷰어를 끄면 사라집니다. (pick path 신선도를 위해 color는 30 fps로 둡니다.)
 
 **전제** (최초 1회): 보드에 `sudo apt install ros-humble-compressed-image-transport`, 데스크톱에 `my_interfaces` + `detection_viewer_pkg` 빌드. 전체 절차·게이트·함정: `docs/vision/desktop_viewer_plan.md`
 
@@ -157,6 +151,7 @@ yolo_v3_tiny_training/   모델 재생산 경로 (학습→양자화→컴파일
 |---|---|
 | `docs/STATUS.md` | **여기부터** — 통합 허브 + 정본 라우팅 표 |
 | `docs/vision/workflow.md` | 노드별 파라미터와 **그 값의 근거** |
+| `docs/vision/detector_worker_walkthrough.md` | detector node + worker **코드 정독 지도** (공부용) |
 | `docs/vision/vision_final.md` | 비전 모델 전체 (SSD→YOLO 학습·DPU 배포·최적화) |
 | `docs/rt/rt_patch.md` / `docs/rt/rt_kernel_postmortem.md` | RT 커널 구축 / 크래시 규명 |
 | `docs/vision/desktop_viewer_plan.md` | 데스크톱 bbox 뷰어 (✅ 완료) |

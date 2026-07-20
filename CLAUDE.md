@@ -30,11 +30,12 @@ source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash
 ros2 launch system_bringup_pkg pick_place_vitis_ai.launch.py
 ```
 
-To watch detections as a bbox overlay on the desktop (verified 2026-07-16), swap
-in `viewing.launch.py` (camera + detector only) and run
-`detection_viewer_pkg/detection_viewer_node` on the desktop. The board only
-JPEG-compresses; the desktop joins by header stamp and draws. It costs the board
-LESS than the full pipeline (0.79 vs 1.8 core), so it is not a load concern.
+To watch detections as a bbox overlay on the desktop (verified 2026-07-16;
+launches merged 2026-07-20), keep this same launch running and run
+`detection_viewer_pkg/detection_viewer_node` on the desktop — there is no
+separate viewing launch. The board only JPEG-compresses; the desktop joins by
+header stamp and draws. The compressed topic encodes LAZILY (only while the
+viewer subscribes), so it adds nothing to the board when nobody is watching.
 Do NOT enable `publish_overlay` to get this — board-side drawing is 44 ms/frame
 on top of a 37.6 ms detect and silently breaks the 15 Hz contract.
 Full procedure: `docs/vision/desktop_viewer_plan.md`

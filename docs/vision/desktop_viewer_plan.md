@@ -3,6 +3,8 @@
 **작성·실행 2026-07-16.** 보드 실측 조사(8 에이전트 / 125 사실 / 34 리스크 + 적대적 3중 검증) 기반으로 계획하고, **같은 날 실물로 완주했다.**
 목적: 파이프라인 검출 결과를 데스크톱 화면에서 bbox overlay 영상으로 본다. **보드 부하는 순감**이어야 한다.
 
+> **2026-07-20 통합**: `viewing.launch.py`(검출 전용)를 `pick_place_vitis_ai.launch.py`에 흡수하고 삭제했다. 이제 launch는 **하나**다 — 전체 pick 파이프라인이 항상 돌고 데스크톱 뷰어는 거기 붙는다. `realsense_viewing.yaml`(color 15 fps)도 제거했다(프로덕션 pick path 신선도 때문에 **color 30 fps 유지**). 통합 근거: 압축 토픽은 플러그인(`ros-humble-compressed-image-transport`)만 깔려 있으면 전체 파이프라인에서도 광고되고 **구독 시에만 인코딩**되므로(§1.2 lazy) 뷰잉 전용 launch가 애초에 불필요했다 — 2026-07-20 보드 실측으로 재확인(전체 6노드 기동 + `/compressed` 광고 + Subscription 0에서 인코딩 0 + `/detections` 15.3 Hz). **아래 본문의 `viewing.launch.py`·`realsense_viewing.yaml` 명령/수치는 2026-07-16 당시 기록이라 그대로 둔다** — 실행은 `pick_place_vitis_ai.launch.py`로 하면 된다.
+
 ## 실행 결과 (2026-07-16, 전 게이트 통과)
 
 | Gate | 결과 |

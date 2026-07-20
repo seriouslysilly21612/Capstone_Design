@@ -1,3 +1,30 @@
+"""The single bringup for the perception pipeline — and its desktop viewer.
+
+Brings up the full pick pipeline:
+    camera -> detector -> pick_logic -> pick_target_3d -> (static TF) -> pick_target_base
+
+This is also the ONLY launch you need to watch detections as a bbox overlay on
+the desktop. There is no separate "viewing" launch (2026-07-20: the old
+viewing.launch.py was merged into this file), because watching does not need a
+different bringup — it needs a subscriber:
+
+  * The camera advertises /camera/camera/color/image_raw/compressed via
+    image_transport (plugin: ros-humble-compressed-image-transport). That JPEG
+    stream is encoded LAZILY — image_transport skips the encode while nothing
+    subscribes to it, so it costs the board ZERO until a viewer attaches.
+  * To watch: run detection_viewer_pkg/detection_viewer_node on the DESKTOP. It
+    subscribes to that compressed topic + /detections, joins them by header
+    stamp, and draws. The board only compresses; all drawing is on the desktop.
+    Full procedure/gates: docs/vision/desktop_viewer_plan.md
+
+Color stays at 30 fps here (the production pick path wants fresh frames — see
+realsense_pick_place.yaml). The detector caps at 15 Hz and the viewer renders on
+detection arrival, so while you watch, ~half the 30 fps JPEG encodes go unused —
+a monitoring-only cost that is zero the moment you close the viewer. Do NOT try
+to see boxes by flipping publish_overlay on the board: board-side drawing is
+~44 ms/frame on top of a ~37.6 ms detect and silently busts the 15 Hz budget.
+"""
+
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
