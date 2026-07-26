@@ -137,7 +137,7 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 | **2b 브릿지** | Gate 2b: 브릿지 합성테스트 (카메라·로봇 불필요) | ✅ **5/5 PASS ×2연속** + 누수 0 (`tools/test_gate2b_bridge.py`) — 메뉴/param 왕복(`ros2 param get`=apple 실증)/lock/std게이트(≈1.5 mm<8 mm)/goal z=0.27 m(0.12+마진 0.15) |
 | **3 서보-오프 런** | 수 분 무단절 + 조인트 판독 + 파이프라인 동시 + in-app 'p'/'v' | ✅ (2026-07-26, `tools/test_phase3_smoke.py`) app-only **4/4** → 풀 런 **6/6** → **300 s 홀드**: 정상상태 Lost frames 0(활성화 천이 2개는 베이스라인 제외), 에러 0, 7슬레이브 OP 유지. **라이브 메뉴에 5클래스 전부** 표시→apple 선택→실 pick_logic param 반영→'v'는 person_guard(area 0.08≥0.06)로 정당 거부 = **D7 첫 실환경 실증**. 조인트 판독 = DeInit **PDO값과 SDO 대조 전축 수 카운트 일치**(servo-off 브레이크로 손-이동 검사는 불가·불필요). SIGINT DeInit 경로(위치저장·마스터 해제·브릿지 다운·PREOP 복귀) 반복 검증. 코어 격리 A/B는 **비격리로 이미 유실 0이라 보류** — Phase 4 실토크에서 지터 보이면 재개(D10 갱신) |
 | **4 서보온 — 게이트1 grav-comp** | 오퍼레이터 게이트 서보온('r'→'g'→'h') | ✅ (2026-07-26) **6축 동시 0x0237(OPERATION ENABLED), grav-comp 34 s 유지, 손밀기 컴플라이언스 확인, 'j' disarm 클린**. 사전에 E-stop 실효성 확인(버스 전원 차단→해제 후 fault 0 복구, E10). 실행은 `App/Indy7/run.sh` |
-| 4 서보온 — 게이트2 'a' 위치추종 | 하드코딩 목표로 실모션 | ⬜ **선행조건: 카메라 충돌 존 검증** — 팔 전방-하강 경로에 카메라 마운트 실재(오퍼레이터 확인). 'a'의 목표 (-0.181, -0.181, 0.931)이 충돌 존 밖인지 FK/실측 확인 후 진행 |
+| **4 서보온 — 게이트2 'a' 위치추종** | 하드코딩 목표 실모션 | ✅ (2026-07-26) 사전에 **손-유도 프로브로 카메라 위치 실측**: base (+0.70, -0.13, 0.98) → **테이블/카메라 = +X 확정**(워크스페이스 박스 입력). 'a' 목표는 반대편(-X)이라 GO → 3 s quintic 정상 실행·유지·'g' 소프트중단 검증. **정밀도 발견: 정상상태 오차 ~16 cm**(도달 (-0.330,-0.194,0.866) vs 목표 (-0.181,-0.181,0.931)) — 무적분 CTC + 하모닉 마찰의 전형. **Phase 5 전 개선 필수**(게인/적분/도달 후 재타겟 반복 — 궤적 CSV는 B6 픽스로 분석 가능해짐) |
 | 5 캘리브+데모 | rPc→TF 정본화 → top-down R 확정 → 'v' 접근 데모 | ⬜ |
 
 ## 6. 코드 변경 요약
@@ -181,6 +181,7 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 | B3 | `RegisterPDOEntry` unsigned 반환 → 실패 가드 27개 + 내부 에러로그 전부 죽은 코드, 실패 시 offset 0xFFFFFFFF로 다음 사이클 OOB | INT64 + signed 캡처로 소생 (§14.2 #1) |
 | B4 | 저장소에 저자 x86 빌드잔재(obj/*.d, bin, lib) 커밋됨 → aarch64에서 make 즉사 | 브랜치에서 untrack + `make clean` 선행 규칙 |
 | B5 | `INDY7.cfg`에 DC 키 부재 → 슬레이브 DC 전부 OFF가 저자의 실구동 상태 | 그대로 브링업(D8), DC 켤 준비만 완료 |
+| B6 | `make_csv`가 저자 홈 절대경로(`/home/raimlab/...`) 하드코딩 → 궤적 CSV 저장 전부 실패 | 로컬 경로로 픽스(`d94c1c1`) — 추종오차 분석 도구 복구 |
 
 **개발환경 함정** (재발 방지 규칙):
 
@@ -226,12 +227,15 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 
 ## 9. 남은 것
 
-- **Phase 4 게이트2**: `'a'` 위치추종 실모션 — **카메라 충돌 존 검증 선행**(하드코딩 목표의
-  FK 위치 vs 카메라 마운트 위치). 서보온 절차는 게이트1에서 확립됨(run.sh → r→g→h, disarm 'j').
-  실토크 상태에서 지터/유실 보이면 그때 isolcpus 3+1 A/B(D10 — Phase 3 비격리 유실 0이라 보류)
-- **Phase 5**: 손-눈 캘리브(파이프라인 토픽 캡처 + 데스크톱 OpenCV solve, D12) → TF 정본화
-  → 워크스페이스 박스 실측치로 교체(**카메라 배제 존 포함**) → top-down R 확정 → `'v'` 접근
-  데모. 라이브 lock은 person_guard 때문에 **카메라 시야 밖에서**
+- **위치 정확도 개선 (Phase 5 선행 필수)**: 게이트2 실측 정상상태 오차 ~16 cm → 접근 데모
+  (물체 위 z+0.15) 무의미해지는 수준. 후보: ① Kp/Kd 상향(저자 ISO 런 게인 대조) ② 적분항
+  ③ **도달 후 오차 재측정→재IK 반복**(코드 추가 최소, 권장 1순위) ④ 마찰 보상. 분석 도구 =
+  B6 픽스로 살아난 궤적 CSV('l' 로깅) + 'd' LogDistanceError
+- **Phase 5**: 손-눈 캘리브(파이프라인 토픽 캡처 + 데스크톱 OpenCV solve, D12; **플랜지
+  AprilTag 부착 확인됨**) → TF 정본화 → 워크스페이스 박스 실측치 교체(**카메라 존 = +X 0.70
+  높이 0.98 부근 배제**, 테이블=+X 확정) → top-down R 확정 → `'v'` 접근 데모. 라이브 lock은
+  person_guard 때문에 **카메라 시야 밖에서**
+- isolcpus 3+1 A/B는 계속 보류(D10 — 서보온 런에서도 문제 신호 없음)
 - **백로그**: 연속 추적(closed-loop), MuJoCo sim 합류, indy_iface GUI, isolcpus 3+1
   (cmdline `isolcpus=3 nohz_full=3 rcu_nocbs=3 irqaffinity=0-2` + 앱 태스크 CPU3 pin),
   DC sync0 실험(cfg 주석 해제), RPU+SOEM 트랙
