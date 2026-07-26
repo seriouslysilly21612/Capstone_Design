@@ -94,7 +94,7 @@ RAON-RT는 이미 base_link로 변환된 좌표를 소비만 한다 — RAON-RT�
 | D7 | person 안전 = **근접(대형 bbox)만 차단+래치** | 배경 통행인엔 무반응, 워크스페이스 접근 시 타깃 무효화 |
 | D8 | 슬레이브 DC = **저자 구성 그대로 OFF(SM-sync)로 브링업** | INDY7.cfg에 `DC_SUPPORT` 키 자체가 없음(기본 0) = 저자의 검증된 구동 상태. DC 실험은 cfg 주석 해제로(코드 준비됨) |
 | D9 | 사이클 = **1 ms 유지** | `m_dt=0.001` 하드코딩과 결합돼 있고, 동급 GEM 실측 "1 ms 안정" 근거. 2 ms 완충안은 폐기 |
-| D10 | 3+1 코어 격리 = **Phase 2~3 경계에 적용** | RT-POSIX가 전 태스크를 CPU0에 기본 pin → isolcpus만으론 무효, 앱 pin 코드와 한 세트. Phase 3 런에서 격리 전/후 A/B 실측 |
+| D10 | 3+1 코어 격리 = **보류 유지, 지터 신호 시 재개** | RT-POSIX가 전 태스크를 CPU0에 기본 pin(`posix_rt.c:257`) → isolcpus만으론 무효, 앱 pin 코드와 한 세트. **실증 확인(2026-07-27)**: `/proc/cmdline`에 isolcpus 계열 없음(`skew_tick=1`만) — **Phase 4 서보온~5-4 접근 데모 전 구간이 비격리로 수행됨**. 실제 토폴로지 = 앱 RT 태스크 전부 CPU0 고정+prio 97~98, 파이프라인(~1.8코어)·브릿지 ROS2 스레드는 CPU0~3 CFS 배분(CPU0 경합 시 RT 선점). 이 구성으로 Lost 0·지터 이상 무(E13은 IK 결함, 타이밍 무관) |
 | D11 | 캘리브 이미지 = **파이프라인 토픽에서 캡처** | librealsense 직접 열기 금지(충돌). intrinsics도 camera_info에서 → `save_camera_params` 불필요 |
 | D12 | 캘리브 체인 = **ViSP 완전 배제, 태그 pose는 OpenCV로** (2026-07-26) | `visp-compute-apriltag-poses`는 x86-64 바이너리+소스 미포함+원저자 홈 rpath → 어디서도 실행 불가. `cv2.aruco`(APRILTAG_36h11)+`solvePnP`로 동일 YAML 산출. intrinsic은 공장값(camera_info) 1순위 — 파이프라인 3D와 같은 카메라 모델이어야 rMc 정합(불일치가 rMc에 흡수되는 계통오차 방지). 원저자 camera.xml은 640×480이라 어차피 재사용 불가(우린 848×480). 잔차 불량 시에만 `cv2.calibrateCamera` 재캘리브로 escalation |
 
@@ -271,7 +271,8 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   (home→목표 상공→수직 하강 2단, 현행 quintic 재사용으로 최소 변경) — ②가 저위험 우선
   후보, ①은 연속 추적(visual servo) 업그레이드와 합류
 - 소품: 접근 거부 시 자동 home 경유 폴백(REFUSED→'b'→재시도를 수동으로 하는 것의 자동화)
-- isolcpus 3+1 A/B는 계속 보류(D10 — 서보온 런에서도 문제 신호 없음)
+- isolcpus 3+1 A/B는 계속 보류(D10 — **접근 데모까지 전 구간 비격리 실측 확인**, cmdline
+  무설정 + RT-POSIX CPU0 pin 토폴로지로 Lost 0·지터 무. 문제 신호 시 재개)
 - **백로그**: 연속 추적(closed-loop), MuJoCo sim 합류, indy_iface GUI, isolcpus 3+1
   (cmdline `isolcpus=3 nohz_full=3 rcu_nocbs=3 irqaffinity=0-2` + 앱 태스크 CPU3 pin),
   DC sync0 실험(cfg 주석 해제), RPU+SOEM 트랙
