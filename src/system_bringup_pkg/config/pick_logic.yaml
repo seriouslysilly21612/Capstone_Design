@@ -25,5 +25,30 @@ pick_logic_node:
     min_bbox_area_px: 400.0
     max_bbox_area_ratio: 0.5
 
+    # ---- v2 (2026-07-26): 선택·안정성·안전 ----
+    # desired_class: LIVE 파라미터. '' = 전 pickable 중 점수 최적 자동 선택.
+    # 로봇측 오퍼레이터 메뉴가 런타임에 세팅한다:
+    #   ros2 param set /pick_logic_node desired_class apple
+    desired_class: ""
+    # 점수 = w_conf·conf + w_center·(화면중앙 근접) + w_area·(크기 정규화)
+    score_w_conf: 0.5
+    score_w_center: 0.3
+    score_w_area: 0.2
+    # 같은 물체(클래스+중심거리 match_px)가 min_frames 연속 보여야 valid.
+    # 다른 후보는 margin 이상 점수 우위를 frames 연속 보여야 타깃 전환(플래핑 방지).
+    # 타깃이 lost_timeout_frames 연속 사라지면 트랙 해제.
+    stability_min_frames: 3
+    stability_match_px: 60.0
+    lost_timeout_frames: 5
+    hysteresis_margin: 0.08
+    hysteresis_frames: 3
+    # 근접 person 래치: person bbox가 화면의 area_ratio 이상이면(=가까움)
+    # clear_sec 동안 모든 타깃 무효화(reason=person_guard).
+    person_guard_enable: true
+    person_class_name: "person"
+    person_min_confidence: 0.3
+    person_area_ratio_threshold: 0.06
+    person_clear_sec: 2.0
+
     publish_invalid_targets: true
     log_period_sec: 1.0
