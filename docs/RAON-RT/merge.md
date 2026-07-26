@@ -22,9 +22,11 @@
 - **완료**: Phase 0(기반: RT-POSIX·EMasterApp aarch64) → Phase 1(버스 검증: 7슬레이브 PDO
   비트단위 일치) → Phase 2a(ViSP 제거 앱 빌드 + §14.2 픽스) → **pick_logic v2**(선택·안정성·
   person 가드, 합성테스트 6/6) → **Gate 2b**(ROS2 브릿지 + 대화형 메뉴 'p'/숫자/'v',
-  합성테스트 5/5 ×2연속).
-- **다음**: Phase 3(서보-오프 통합 런, 파이프라인 동시) → Phase 4(서보온 grav-comp) →
-  Phase 5(손-눈 캘리브 → TF 정본화 → 접근 데모).
+  합성테스트 5/5 ×2연속) → **Phase 3**(서보-오프 통합 런: 300 s 무단절 OP·정상상태 유실 0·
+  파이프라인 동시·in-app 메뉴/param/'v'·PDO=SDO 조인트 대조·person_guard 실환경 실증).
+- **다음**: Phase 4(서보온 grav-comp) → Phase 5(손-눈 캘리브 → TF 정본화 → 접근 데모).
+- **사건 1건 해소(2026-07-26)**: 첫 Phase 3 시도에서 앱 `bad_alloc`(memlock 한도 유한 세션 +
+  `mlockall(MCL_FUTURE)`+DDS arena) → teardown 중 커널 하드 락업 → 보드 재부팅. §7 E6~E8.
 - **로봇**: Indy7이 eth0에 직결, 제어전원 인가 시 7슬레이브 PREOP 상시 응답. 모션은 아직 0.
 
 ## 1. 목표와 최종 아키텍처
@@ -98,7 +100,8 @@ RAON-RT는 이미 base_link로 변환된 좌표를 소비만 한다 — RAON-RT�
 `kv260-merge` 커밋 트레일 (main 이후):
 `59fc801` 브랜치 셋업 → `2cdba3a` x86 빌드잔재 untrack → `9c3a28a` Gate0 테스트+rtposix 패치 →
 `973a57e` gitignore → `f59f49b` gate0 warm-up 스킵 → `b3b8209` **Phase 2a** (ViSP 제거+픽스+빌드) →
-`f7c27fc` **Gate 2b** (ROS2 pick bridge + 대화형 흐름 + 합성테스트).
+`f7c27fc` **Gate 2b** (ROS2 pick bridge + 대화형 흐름 + 합성테스트) → `1ed4881` **Phase 3**
+(스모크 스크립트 + E8 키보드 가드 + 사건 방어책).
 
 ## 4. 시스템 배치 현황 (보드, 전부 검증됨)
 
@@ -131,8 +134,8 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 | **2a 앱 포팅** | Gate 2a: aarch64 빌드 | ✅ `bin/Indy7Ctrl.out` — ViSP-free, 의존성 전해소 |
 | **2a' 파이프라인** | pick_logic v2 합성테스트 | ✅ **6/6 PASS ×2연속** + 프로세스 누수 0 (`tools/vision/test_pick_logic_v2.py`) |
 | **2b 브릿지** | Gate 2b: 브릿지 합성테스트 (카메라·로봇 불필요) | ✅ **5/5 PASS ×2연속** + 누수 0 (`tools/test_gate2b_bridge.py`) — 메뉴/param 왕복(`ros2 param get`=apple 실증)/lock/std게이트(≈1.5 mm<8 mm)/goal z=0.27 m(0.12+마진 0.15) |
-| 3 서보-오프 런 | 수 분 무단절 사이클 + 조인트 판독 + 파이프라인 동시 (in-app 'p'/'v' 흐름 실증 포함) | ⬜ 다음 작업 |
-| 4 서보온 | grav-comp → 'a' 위치추종 | ⬜ |
+| **3 서보-오프 런** | 수 분 무단절 + 조인트 판독 + 파이프라인 동시 + in-app 'p'/'v' | ✅ (2026-07-26, `tools/test_phase3_smoke.py`) app-only **4/4** → 풀 런 **6/6** → **300 s 홀드**: 정상상태 Lost frames 0(활성화 천이 2개는 베이스라인 제외), 에러 0, 7슬레이브 OP 유지. **라이브 메뉴에 5클래스 전부** 표시→apple 선택→실 pick_logic param 반영→'v'는 person_guard(area 0.08≥0.06)로 정당 거부 = **D7 첫 실환경 실증**. 조인트 판독 = DeInit **PDO값과 SDO 대조 전축 수 카운트 일치**(servo-off 브레이크로 손-이동 검사는 불가·불필요). SIGINT DeInit 경로(위치저장·마스터 해제·브릿지 다운·PREOP 복귀) 반복 검증. 코어 격리 A/B는 **비격리로 이미 유실 0이라 보류** — Phase 4 실토크에서 지터 보이면 재개(D10 갱신) |
+| 4 서보온 | grav-comp → 'a' 위치추종 | ⬜ 다음 작업 |
 | 5 캘리브+데모 | rPc→TF 정본화 → top-down R 확정 → 'v' 접근 데모 | ⬜ |
 
 ## 6. 코드 변경 요약
@@ -148,6 +151,8 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 | `App/Indy7/ROS2PickBridge.{h,cpp}` | **신규(Gate 2b)** — `/pick_target_base`·`/detections` 구독 + `AsyncParametersClient`로 `desired_class` LIVE 설정. 스레딩 계약: ROS2 I/O·메뉴·통계게이트는 브릿지 자체 non-RT 스레드(spin+worker), RT는 wait-free 원자 API+SPSC goal 슬롯만. `SignalHandlerOptions::None`(앱 SIGINT 보존). 게이트: N=15, 축별 std<8 mm, 워크스페이스 박스(Phase 5 전 placeholder — 하네스는 `SetWorkspaceBox`로 확장), z마진 0.15 m |
 | `tools/gate2b_bridge_test.cpp` | 브릿지 단독 하네스(EtherCAT/로봇 불필요) — stdin 명령 p/숫자/v/q, RT 소비자 대역 poller |
 | `tools/test_gate2b_bridge.py` | 합성 검증 드라이버 — 실브릿지+실 pick_logic 노드 vs 합성 `/detections`·`/pick_target_base` 피더. C1 메뉴 / C2 param ack / C3 `ros2 param get` 실증 / C4 lock / C5 게이트 통과 goal(z=0.27). E1~E3 방어 패턴 이식 |
+| `tools/test_phase3_smoke.py` | **Phase 3 정본 스크립트** — P0 preflight(rtprio/memlock/슬레이브/중복실행) → P1 파이프라인 기능적 대기 → P2 앱+OP → P3 홀드(`--hold N`, E9 규칙) → P4 in-app 'p'/선택/'v' → P5 축별 SDO → P6 SIGINT DeInit 검증. `--app-only` 격리 스테이지. 앱 실행에 `MALLOC_ARENA_MAX=2`+`stdbuf -oL` |
+| `App/Indy7/Indy7Ctrl.cpp` (keyboard) | E8 개행 가드 — '\n'/'\r'는 키로 취급 안 함 |
 | `App/Indy7/INDY7.cfg` | **전 축 `AUTO_SERVO_ON=0`**, `ENABLE_CONTROLLER_AT_STARTUP=0`, 5태스크(VS 태스크 제거), 경로 로컬화, DC 실험용 주석 템플릿 |
 | `EMasterApp/Device/EcatSlaveBase.{h,cpp}` | `RegisterPDOEntry` **UINT32→INT64** (내부 `<0` 체크도 unsigned라 이중 사망 상태였음) |
 | `EMasterApp/Device/Slave{CIA402Base,NRMKEndTool}.cpp` | **죽어있던 PDO 실패 가드 27개 소생** — signed 임시변수 캡처(대입식이 unsigned면 반환형만 고쳐도 무효) |
@@ -184,6 +189,10 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 | E3 | `pgrep/pkill -f`는 패턴이 **자기 셸 명령줄에 있으면 자살** | 킬 전 `/proc/PID/comm` 검사(python3/노드명만), 확인 명령은 별도 호출로 분리 |
 | E4 | pick_logic 실행파일명은 `pick_logic` (노드명 `pick_logic_node`와 다름) | — |
 | E5 | **Humble include의 CycloneDDS 지뢰**: `include/dds/features.h`·`include/idl/{string.h,endian.h}`가 glibc 표준 헤더를 섀도잉 — 저자 Indy7_ROS2 Makefile의 `find -maxdepth 1` -I 샷건이 이 디렉토리들을 포함해 libstdc++ 컴파일이 `__throw_length_error` 류로 붕괴(저자의 `-include cstdio/cstring/cstdlib`는 이것의 밴드에이드) | -I는 실제 include하는 패키지만 **화이트리스트** (`ROS_PKGS` 변수) — 섀도 디렉토리 원천 배제, 누락 시 명시적 에러로 드러남 |
+| E6 | **에이전트/VSCode 셸은 PAM limits 미적용**(limits.d 이후에 뜬 세션이라도 데몬 계열은 안 탐): rtprio=0 → RT-POSIX 태스크 생성 EPERM 전멸, memlock 유한 → E7 | `sudo prlimit --rtprio=98:98 --memlock=unlimited:unlimited --pid <claude PID>`로 조상 프로세스에 주입(자식 상속) 또는 재부팅 후 새 세션. 스크립트 preflight가 둘 다 검사 |
+| E7 | **`mlockall(MCL_FUTURE)` + ROS2/DDS = 잠금 폭발**: 스레드별 glibc malloc arena(가상 64 MB)·8 MB 스택이 전부 물리 잠금 → memlock 490 MB 한도 초과 시 **할당 자체가 실패**(`std::bad_alloc`, OP 중 앱 사망). Gate 2b 하네스는 mlockall이 없어 잠복 | memlock **unlimited 필수** + 앱 실행 환경 `MALLOC_ARENA_MAX=2`. **사건**: 이 크래시가 유발한 동시 teardown(마스터 해제+DPU+realsense) 중 **커널 하드 락업 1회**(저널 무flush 단절, 21:56:11) → 보드 재부팅. 트리거(앱 비정상사망) 제거로 재발 방지; 재발 시 시리얼 콘솔 필요. 슬레이브는 SM watchdog으로 SAFEOP 낙하 = 버스 측 안전거동 정상 |
+| E8 | **파이프 stdin 키 레이스**: `"p\n"` 두 글자가 한 번에 도착하면 keyboard 태스크가 `m_cKeyPress`를 'p'→'\n'으로 즉시 덮어써 1 kHz 소비자가 'p'를 못 봄(실터미널은 사람 속도라 저자 미조우) | 앱 keyboard 태스크에 '\n'/'\r' 무시 가드 + 스크립트는 개행 없이 단일 문자 전송 |
+| E9 | IgH `ethercat master`의 **Lost frames는 감소 가능한 파생 통계**(지연 프레임이 뒤늦게 계상되면 ↓). PREOP→OP 활성화 천이 자체가 프레임 2개 정도 유실(정상) | 유실 판정은 **OP 도달 후 재베이스라인** + **증가 시에만 FAIL** |
 
 ## 8. 대화형 선택 계약 (파이프라인 ↔ RAON-RT) — **구현 완료(2026-07-26, `f7c27fc`)**
 
@@ -209,10 +218,9 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 
 ## 9. 남은 것
 
-- **Phase 3**: 서보-오프 통합 런 — OP 도달·사이클 유지·손으로 팔 움직여 조인트 판독 확인
-  + 파이프라인 동시 가동으로 E2E 신호 경로까지 (모션 0; in-app 'p'/메뉴/'v' 게이트까지 실증
-  가능 — goal은 서보-오프라 소비돼도 모션 없음). 격리 전/후 A/B 실측도 여기서
-- **Phase 4**: 서보온 grav-comp (`t`→`r`→`g`) → `'a'` 위치추종
+- **Phase 4**: 서보온 grav-comp (`t`→`r`→`g`) → `'a'` 위치추종. 오퍼레이터(사용자) 현장 필수.
+  카메라 시야에 사람이 있으면 person_guard가 타깃을 막으므로 **라이브 lock 데모는 시야 밖에서**.
+  실토크 상태에서 지터/유실 보이면 그때 isolcpus 3+1 A/B(D10 — Phase 3 비격리 유실 0이라 보류)
 - **Phase 5**: 손-눈 캘리브(파이프라인 토픽 캡처 + 데스크톱 OpenCV solve, D12) → TF 정본화
   → 워크스페이스 박스 실측치로 교체 → top-down R 확정 → `'v'` 접근 데모
 - **백로그**: 연속 추적(closed-loop), MuJoCo sim 합류, indy_iface GUI, isolcpus 3+1
