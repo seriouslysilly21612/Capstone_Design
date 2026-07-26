@@ -21,9 +21,10 @@
   자세로 **look-then-move 접근** (CST 토크 + RBDL, 1 kHz).
 - **완료**: Phase 0(기반: RT-POSIX·EMasterApp aarch64) → Phase 1(버스 검증: 7슬레이브 PDO
   비트단위 일치) → Phase 2a(ViSP 제거 앱 빌드 + §14.2 픽스) → **pick_logic v2**(선택·안정성·
-  person 가드, 합성테스트 6/6).
-- **다음**: Gate 2b(ROS2 브릿지 + 대화형 메뉴) → Phase 3(서보-오프 통합 런) → Phase 4(서보온
-  grav-comp) → Phase 5(손-눈 캘리브 → TF 정본화 → 접근 데모).
+  person 가드, 합성테스트 6/6) → **Gate 2b**(ROS2 브릿지 + 대화형 메뉴 'p'/숫자/'v',
+  합성테스트 5/5 ×2연속).
+- **다음**: Phase 3(서보-오프 통합 런, 파이프라인 동시) → Phase 4(서보온 grav-comp) →
+  Phase 5(손-눈 캘리브 → TF 정본화 → 접근 데모).
 - **로봇**: Indy7이 eth0에 직결, 제어전원 인가 시 7슬레이브 PREOP 상시 응답. 모션은 아직 0.
 
 ## 1. 목표와 최종 아키텍처
@@ -47,10 +48,11 @@
                                 │ desired_class (LIVE param)        ▼
                                 │ ← ros2 param set ────  /pick_target_base (PickTarget3D, base_link, m)
                                                                     │ 구독
-[RAON-RT App/Indy7 (kv260-merge)]                                   ▼
-  'p' 키: /detections 집계 메뉴 → 물체 선택 → param set ──┘
-  'g' 키: N프레임 통계 게이트(std 체크) → goal=(x, y, z+margin, top-down R)
-          → SetTargetPose(RBDL IK) → quintic 궤적 → CTC → CST 토크 → EtherCAT → Indy7
+[RAON-RT App/Indy7 (kv260-merge)] — CROS2PickBridge                 ▼
+  'p' 키: /detections 집계 메뉴 → 숫자로 물체 선택 → param set ──┘
+  'v' 키: N프레임 통계 게이트(std·워크스페이스 박스) → goal=(x, y, z+margin)
+          → SetTargetPosePositionOnly(RBDL IK) → quintic 궤적 → CTC → CST 토크
+          → EtherCAT → Indy7      (v1은 현재 자세 유지; top-down R은 Phase 5)
 ```
 
 ### 1.3 좌표 변환의 소재 (자주 헷갈리는 지점)
@@ -81,6 +83,7 @@ RAON-RT는 이미 base_link로 변환된 좌표를 소비만 한다 — RAON-RT�
 | D9 | 사이클 = **1 ms 유지** | `m_dt=0.001` 하드코딩과 결합돼 있고, 동급 GEM 실측 "1 ms 안정" 근거. 2 ms 완충안은 폐기 |
 | D10 | 3+1 코어 격리 = **Phase 2~3 경계에 적용** | RT-POSIX가 전 태스크를 CPU0에 기본 pin → isolcpus만으론 무효, 앱 pin 코드와 한 세트. Phase 3 런에서 격리 전/후 A/B 실측 |
 | D11 | 캘리브 이미지 = **파이프라인 토픽에서 캡처** | librealsense 직접 열기 금지(충돌). intrinsics도 camera_info에서 → `save_camera_params` 불필요 |
+| D12 | 캘리브 체인 = **ViSP 완전 배제, 태그 pose는 OpenCV로** (2026-07-26) | `visp-compute-apriltag-poses`는 x86-64 바이너리+소스 미포함+원저자 홈 rpath → 어디서도 실행 불가. `cv2.aruco`(APRILTAG_36h11)+`solvePnP`로 동일 YAML 산출. intrinsic은 공장값(camera_info) 1순위 — 파이프라인 3D와 같은 카메라 모델이어야 rMc 정합(불일치가 rMc에 흡수되는 계통오차 방지). 원저자 camera.xml은 640×480이라 어차피 재사용 불가(우린 848×480). 잔차 불량 시에만 `cv2.calibrateCamera` 재캘리브로 escalation |
 
 ## 3. 저장소·브랜치 체계
 
@@ -94,7 +97,8 @@ RAON-RT는 이미 base_link로 변환된 좌표를 소비만 한다 — RAON-RT�
 
 `kv260-merge` 커밋 트레일 (main 이후):
 `59fc801` 브랜치 셋업 → `2cdba3a` x86 빌드잔재 untrack → `9c3a28a` Gate0 테스트+rtposix 패치 →
-`973a57e` gitignore → `f59f49b` gate0 warm-up 스킵 → `b3b8209` **Phase 2a** (ViSP 제거+픽스+빌드).
+`973a57e` gitignore → `f59f49b` gate0 warm-up 스킵 → `b3b8209` **Phase 2a** (ViSP 제거+픽스+빌드) →
+`f7c27fc` **Gate 2b** (ROS2 pick bridge + 대화형 흐름 + 합성테스트).
 
 ## 4. 시스템 배치 현황 (보드, 전부 검증됨)
 
@@ -126,10 +130,10 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 | **1 버스 검증** | Gate 1: 스캔↔cfg 대조 (모션 0) | ✅ 7/7 슬레이브(6×Drive `0x089a/0x30000000` + EOAT `0x10000007` 실존→cfg 무수정), **PDO 맵 10엔트리 비트단위 일치**, DC 64bit, Lost frames 0 |
 | **2a 앱 포팅** | Gate 2a: aarch64 빌드 | ✅ `bin/Indy7Ctrl.out` — ViSP-free, 의존성 전해소 |
 | **2a' 파이프라인** | pick_logic v2 합성테스트 | ✅ **6/6 PASS ×2연속** + 프로세스 누수 0 (`tools/vision/test_pick_logic_v2.py`) |
-| 2b 브릿지 | Gate 2b | ⬜ 다음 작업 |
-| 3 서보-오프 런 | 수 분 무단절 사이클 + 조인트 판독 + 파이프라인 동시 | ⬜ |
+| **2b 브릿지** | Gate 2b: 브릿지 합성테스트 (카메라·로봇 불필요) | ✅ **5/5 PASS ×2연속** + 누수 0 (`tools/test_gate2b_bridge.py`) — 메뉴/param 왕복(`ros2 param get`=apple 실증)/lock/std게이트(≈1.5 mm<8 mm)/goal z=0.27 m(0.12+마진 0.15) |
+| 3 서보-오프 런 | 수 분 무단절 사이클 + 조인트 판독 + 파이프라인 동시 (in-app 'p'/'v' 흐름 실증 포함) | ⬜ 다음 작업 |
 | 4 서보온 | grav-comp → 'a' 위치추종 | ⬜ |
-| 5 캘리브+데모 | rPc→TF 정본화 → 'g' 접근 | ⬜ |
+| 5 캘리브+데모 | rPc→TF 정본화 → top-down R 확정 → 'v' 접근 데모 | ⬜ |
 
 ## 6. 코드 변경 요약
 
@@ -137,10 +141,13 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 
 | 파일 | 변경 |
 |---|---|
-| `App/Indy7/Indy7Ctrl.{h,cpp}` | VisualServo 완전 제거(멤버·TASK5·'v'키·RT루프 주입블록·proc), `SetAsDCRef(slave0)` 가드콜 추가, calib 출력 경로 `App/CalibUtils/kv260/` |
+| `App/Indy7/Indy7Ctrl.{h,cpp}` | VisualServo 완전 제거(멤버·TASK5·구 'v'키·RT루프 주입블록·proc), `SetAsDCRef(slave0)` 가드콜 추가, calib 출력 경로 `App/CalibUtils/kv260/` · **Gate 2b**: 브릿지 수명주기(Init 비치명 실패 허용/DeInit), 'p'/숫자/'v' 키 핸들러(원자플래그만), RT 루프 goal 소비 SM('n'키 검증 시퀀스 재사용: grav-comp→위치전용 IK→quintic 3 s→IK6dof+CTC, ISO/RECT 상호배제·이동중 재트리거 금지) |
 | `App/Indy7/CalibCapture.{h,cpp}` | **ViSP-free 재작성** — Eigen `AngleAxisd`로 theta-u 변환, `vpPoseVector::saveYAML` 포맷 호환(→ `eye_to_hand_calib.py` 무수정 소비) |
 | `App/Indy7/FullDynControllerRT.cpp` | x86 SSE 헤더 `__SSE__` 가드 (aarch64 빌드 차단 해소) |
-| `App/Indy7/Makefile` | ViSP/librealsense/OpenCV/PCL 제거, `RBDL_DIR` override 추가 |
+| `App/Indy7/Makefile` | ViSP/librealsense/OpenCV/PCL 제거, `RBDL_DIR` override 추가 · **Gate 2b**: humble+my_interfaces 배선(E5의 include **화이트리스트** 방식), rpath 내장(ROS env source 불필요), `make gate2b_test` 타깃 |
+| `App/Indy7/ROS2PickBridge.{h,cpp}` | **신규(Gate 2b)** — `/pick_target_base`·`/detections` 구독 + `AsyncParametersClient`로 `desired_class` LIVE 설정. 스레딩 계약: ROS2 I/O·메뉴·통계게이트는 브릿지 자체 non-RT 스레드(spin+worker), RT는 wait-free 원자 API+SPSC goal 슬롯만. `SignalHandlerOptions::None`(앱 SIGINT 보존). 게이트: N=15, 축별 std<8 mm, 워크스페이스 박스(Phase 5 전 placeholder — 하네스는 `SetWorkspaceBox`로 확장), z마진 0.15 m |
+| `tools/gate2b_bridge_test.cpp` | 브릿지 단독 하네스(EtherCAT/로봇 불필요) — stdin 명령 p/숫자/v/q, RT 소비자 대역 poller |
+| `tools/test_gate2b_bridge.py` | 합성 검증 드라이버 — 실브릿지+실 pick_logic 노드 vs 합성 `/detections`·`/pick_target_base` 피더. C1 메뉴 / C2 param ack / C3 `ros2 param get` 실증 / C4 lock / C5 게이트 통과 goal(z=0.27). E1~E3 방어 패턴 이식 |
 | `App/Indy7/INDY7.cfg` | **전 축 `AUTO_SERVO_ON=0`**, `ENABLE_CONTROLLER_AT_STARTUP=0`, 5태스크(VS 태스크 제거), 경로 로컬화, DC 실험용 주석 템플릿 |
 | `EMasterApp/Device/EcatSlaveBase.{h,cpp}` | `RegisterPDOEntry` **UINT32→INT64** (내부 `<0` 체크도 unsigned라 이중 사망 상태였음) |
 | `EMasterApp/Device/Slave{CIA402Base,NRMKEndTool}.cpp` | **죽어있던 PDO 실패 가드 27개 소생** — signed 임시변수 캡처(대입식이 unsigned면 반환형만 고쳐도 무효) |
@@ -176,29 +183,38 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 | E2 | SIGKILL된 노드는 미등록해제 → **ros2 daemon 그래프 캐시 오염** — half-dead 노드가 graph-count 대기를 속이고 `param set`이 죽은 노드로 감 | 준비판정은 **기능적 핸드셰이크**(빈 프레임→응답 수신)로. preflight에서 `ros2 daemon stop` + param set 재시도 |
 | E3 | `pgrep/pkill -f`는 패턴이 **자기 셸 명령줄에 있으면 자살** | 킬 전 `/proc/PID/comm` 검사(python3/노드명만), 확인 명령은 별도 호출로 분리 |
 | E4 | pick_logic 실행파일명은 `pick_logic` (노드명 `pick_logic_node`와 다름) | — |
+| E5 | **Humble include의 CycloneDDS 지뢰**: `include/dds/features.h`·`include/idl/{string.h,endian.h}`가 glibc 표준 헤더를 섀도잉 — 저자 Indy7_ROS2 Makefile의 `find -maxdepth 1` -I 샷건이 이 디렉토리들을 포함해 libstdc++ 컴파일이 `__throw_length_error` 류로 붕괴(저자의 `-include cstdio/cstring/cstdlib`는 이것의 밴드에이드) | -I는 실제 include하는 패키지만 **화이트리스트** (`ROS_PKGS` 변수) — 섀도 디렉토리 원천 배제, 누락 시 명시적 에러로 드러남 |
 
-## 8. 대화형 선택 계약 (파이프라인 ↔ RAON-RT)
+## 8. 대화형 선택 계약 (파이프라인 ↔ RAON-RT) — **구현 완료(2026-07-26, `f7c27fc`)**
 
-Gate 2b 브릿지가 구현할 확정 흐름:
+구현된 확정 흐름 (`CROS2PickBridge` + Indy7Ctrl):
 
-1. 오퍼레이터 `'p'` → 브릿지가 `/detections` 최근 ~1 s 집계 → 보이는 클래스 메뉴 출력(1~6 숫자)
-2. 숫자 입력 → `ros2 param set /pick_logic_node desired_class <class>` (rcl_interfaces
-   `set_parameters` 서비스 직접 호출)
+1. 오퍼레이터 `'p'` → 브릿지가 `/detections` 최근 ~1 s 집계(클래스당 ≥3프레임, person 제외
+   — person 감지 시 경고줄만) → 번호 메뉴 + 마지막 항목 **AUTO**(desired_class 해제=자동 최적)
+2. 숫자 입력 → `AsyncParametersClient`로 `/pick_logic_node`의 `desired_class` 설정
+   (rcl_interfaces `set_parameters` 서비스, 2 s×3회 재시도). `0`=취소
 3. pick_logic v2가 그 클래스만 통과·안정화 → `/pick_target_base` 유효 스트림 →
-   브릿지 "target locked: <class> at (x,y,z)" 표시
-4. `'g'` → **N프레임(≈1 s) 수집, std(xyz) < 게이트 통과 시 평균값** → goal=(x, y, z+margin,
-   top-down 고정자세) → IK·quintic·CTC 실행
-5. 안전: `target_valid && depth_valid` 필수, 워크스페이스 박스 체크, 이동 중 재트리거 금지,
-   person_guard 시 파이프라인이 원천 무효화
+   브릿지 "TARGET LOCKED: <class> @ base(x,y,z)" 표시 (신선도 <1 s 감시, lost 시 표시)
+4. `'v'` → **N=15프레임(≈1 s, 타임아웃 3 s) 수집 — `target_valid && depth_valid` && 수집
+   시작 시점 클래스 일치 샘플만** → 축별 std<8 mm && goal=(x̄, ȳ, z̄+0.15) 워크스페이스 박스
+   통과 시 SPSC 슬롯으로 RT에 전달 → RT가 grav-comp→위치전용 IK→quintic(3 s)→IK6dof+CTC
+   ('n'키 검증 시퀀스). **v1은 현재 TCP 자세 유지(위치만)** — top-down 고정 R은 URDF TCP
+   관례 검증과 함께 Phase 5에서
+5. 안전: 게이트 전 조건 불충족 시 사유 출력 후 거부, 이동 중(`eAPPROACH_MOVING`) 및
+   ISO/RECT 활성 중 재트리거 금지, goal 미소비 상태 덮어쓰기 금지, person_guard는
+   파이프라인이 원천 무효화, 도달 후 홀드('g'로 grav-comp 복귀)
+
+> 키 변경 이력: 계약 초안의 접근 트리거 `'g'`는 기존 **grav-comp 키와 충돌**해 `'v'`(vision,
+> 구 VisualServo 키 재사용)로 확정. `'p'`/숫자는 기존 키맵과 무충돌.
 
 ## 9. 남은 것
 
-- **Gate 2b**: 브릿지 구현 — `CROS2Node/Executor` 재사용 + PickTarget3D/DetectionArray 구독
-  + 파라미터 클라이언트 + §8 흐름 + Makefile에 humble/my_interfaces 링크
 - **Phase 3**: 서보-오프 통합 런 — OP 도달·사이클 유지·손으로 팔 움직여 조인트 판독 확인
-  + 파이프라인 동시 가동으로 E2E 신호 경로까지 (모션 0). 격리 전/후 A/B 실측도 여기서
+  + 파이프라인 동시 가동으로 E2E 신호 경로까지 (모션 0; in-app 'p'/메뉴/'v' 게이트까지 실증
+  가능 — goal은 서보-오프라 소비돼도 모션 없음). 격리 전/후 A/B 실측도 여기서
 - **Phase 4**: 서보온 grav-comp (`t`→`r`→`g`) → `'a'` 위치추종
-- **Phase 5**: 손-눈 캘리브(파이프라인 토픽 캡처 + 데스크톱 solve) → TF 정본화 → 접근 데모
+- **Phase 5**: 손-눈 캘리브(파이프라인 토픽 캡처 + 데스크톱 OpenCV solve, D12) → TF 정본화
+  → 워크스페이스 박스 실측치로 교체 → top-down R 확정 → `'v'` 접근 데모
 - **백로그**: 연속 추적(closed-loop), MuJoCo sim 합류, indy_iface GUI, isolcpus 3+1
   (cmdline `isolcpus=3 nohz_full=3 rcu_nocbs=3 irqaffinity=0-2` + 앱 태스크 CPU3 pin),
   DC sync0 실험(cfg 주석 해제), RPU+SOEM 트랙
