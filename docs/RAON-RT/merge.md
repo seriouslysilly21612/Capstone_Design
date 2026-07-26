@@ -14,7 +14,7 @@
 
 ---
 
-## 0. 30초 요약 (2026-07-26 현재)
+## 0. 30초 요약 (2026-07-27 현재)
 
 - **목표**: perception 파이프라인은 그대로 살린 채, `/pick_target_base`(base_link 좌표)를
   RAON-RT 제어 앱이 구독 → 오퍼레이터가 터미널 메뉴로 물체 선택 → `z+margin`, top-down
@@ -23,8 +23,12 @@
   비트단위 일치) → Phase 2a(ViSP 제거 앱 빌드 + §14.2 픽스) → **pick_logic v2**(선택·안정성·
   person 가드, 합성테스트 6/6) → **Gate 2b**(ROS2 브릿지 + 대화형 메뉴 'p'/숫자/'v',
   합성테스트 5/5 ×2연속) → **Phase 3**(서보-오프 통합 런: 300 s 무단절 OP·정상상태 유실 0·
-  파이프라인 동시·in-app 메뉴/param/'v'·PDO=SDO 조인트 대조·person_guard 실환경 실증).
-- **다음**: Phase 4(서보온 grav-comp) → Phase 5(손-눈 캘리브 → TF 정본화 → 접근 데모).
+  파이프라인 동시·in-app 메뉴/param/'v'·PDO=SDO 조인트 대조·person_guard 실환경 실증) →
+  **Phase 4**(서보온 게이트1 grav-comp + 게이트2 'a' 실모션) → **refine 160→10.9 mm** →
+  **Phase 5-1~5-3**(손-눈 캘리브 16자세, rMc residual 1.8 cm/1.7° → TF 정본화(quaternion) →
+  박스 실측치 → apple (0.841, -0.102, 0.179) 실좌표 검증).
+- **다음**: Phase 5-4('v' 접근 데모, 새 바이너리로 앱 재시작) + grav-comp 개선(F/T 센서
+  질량 URDF 반영 + sticky-float 앵커).
 - **사건 1건 해소(2026-07-26)**: 첫 Phase 3 시도에서 앱 `bad_alloc`(memlock 한도 유한 세션 +
   `mlockall(MCL_FUTURE)`+DDS arena) → teardown 중 커널 하드 락업 → 보드 재부팅. §7 E6~E8.
 - **로봇**: Indy7이 eth0에 직결, 제어전원 인가 시 7슬레이브 PREOP 상시 응답. 모션은 아직 0.
@@ -63,12 +67,18 @@
 RAON-RT는 이미 base_link로 변환된 좌표를 소비만 한다 — RAON-RT의 rMc/VS 변환 기계는 안 쓴다.
 실제 남은 일은 코드 이동이 아니라:
 
-1. **placeholder TF 정본화** — 현재 `base_link→camera_link`는 가짜값. Phase 5 손-눈 캘리브
-   (`App/CalibUtils`의 AX=XB solver)가 산출한 rMc를 이 정적 TF에 넣는다.
-2. rMc의 "r"은 RAON-RT FK의 로봇 베이스 → 넣는 순간 파이프라인 base_link = RBDL 모델 베이스로
-   구성상 자동 정합. (rMc의 "c"는 color 광학 프레임 — `camera_link`로 환산 시
-   realsense 내부 TF를 역곱해야 하는 축 관례 함정 있음.)
-3. `pick_target_base_node`의 reachability 게이트를 실제 워크스페이스로 재조정.
+1. ~~placeholder TF 정본화~~ **완료(2026-07-27)**: rMc(base→color 광학) t=(0.7612, -0.0997,
+   0.9262), 광축이 base -Z에서 5.6° 기울어진 top-down. launch의 정적 TF는
+   `base_link→camera_link` = rMc·inv(camera_link→color_optical, realsense 라이브 TF 실측)
+   = t (0.761822, -0.084713, 0.924974), **q (0.72390457, -0.03237801, -0.68876782,
+   0.02264346)** — RPY가 pitch 90° gimbal 특이점 근처라 **의도적으로 quaternion 표기**
+   (재합성 오차 0.0004 mm 확인). 원데이터·solver: RAON `App/CalibUtils/kv260/`.
+2. rMc의 "r"은 RAON-RT FK의 로봇 베이스 → 파이프라인 base_link = RBDL 모델 베이스로 자동 정합
+   (검증: 캘리브 태그 z-거리와 FK 플랜지 높이 일치, apple 실좌표 기하 일치).
+3. reachability 게이트는 별도 노드 파라미터가 아니라 **브릿지 워크스페이스 박스가 전담**
+   (실측치 §5 Phase 5 행). **z 의미 주의**: `/pick_target_base`의 z는 물체 **윗표면**(depth가
+   닿는 면)이지 부피 중심이 아니다 — 접근 z+0.15는 표면 기준이라 그대로 안전.
+   **테이블면은 base z≈+0.10** (브레드보드가 로봇 base 0면보다 높음, depth 실측).
 
 ## 2. 확정 결정 로그
 
@@ -102,7 +112,9 @@ RAON-RT는 이미 base_link로 변환된 좌표를 소비만 한다 — RAON-RT�
 `973a57e` gitignore → `f59f49b` gate0 warm-up 스킵 → `b3b8209` **Phase 2a** (ViSP 제거+픽스+빌드) →
 `f7c27fc` **Gate 2b** (ROS2 pick bridge + 대화형 흐름 + 합성테스트) → `1ed4881` **Phase 3**
 (스모크 스크립트 + E8 키보드 가드 + 사건 방어책) → `2c8fae5` **Phase 4 준비** (런타임 enable
-픽스 + 'h'/'j' 서보 arm/disarm 인터록) → `1334658` run.sh 런처 → `d94c1c1` B6+게이트2 → `0668ed2` **refine 10.9 mm**.
+픽스 + 'h'/'j' 서보 arm/disarm 인터록) → `1334658` run.sh 런처 → `d94c1c1` B6+게이트2 → `0668ed2` **refine 10.9 mm** →
+`8093e8a` **Phase 5 캘리브** (grabber/cpo 툴 + 16자세 데이터셋 + rPc + 박스 실측치).
+ros2_ws(main, 로컬): `a9644dc` **TF 정본화 + person_guard off**.
 
 ## 4. 시스템 배치 현황 (보드, 전부 검증됨)
 
@@ -139,7 +151,10 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 | **4 서보온 — 게이트1 grav-comp** | 오퍼레이터 게이트 서보온('r'→'g'→'h') | ✅ (2026-07-26) **6축 동시 0x0237(OPERATION ENABLED), grav-comp 34 s 유지, 손밀기 컴플라이언스 확인, 'j' disarm 클린**. 사전에 E-stop 실효성 확인(버스 전원 차단→해제 후 fault 0 복구, E10). 실행은 `App/Indy7/run.sh` |
 | **정확도 개선 (refine)** | CTC droop 반복 보정 | ✅ (2026-07-27, `0668ed2`) **160 mm → 10.9 mm** (4 pass 단조수렴 60→25→19→17→10.9). 감쇠 0.65 편향 + 속도게이트(|qd|<0.02, 0.3 s) 측정 + tol 12 mm(=stiction 바닥). 'a'와 비전 접근 모두 자동 적용. <5 mm는 게인/closed-loop 백로그 |
 | **4 서보온 — 게이트2 'a' 위치추종** | 하드코딩 목표 실모션 | ✅ (2026-07-26) 사전에 **손-유도 프로브로 카메라 위치 실측**: base (+0.70, -0.13, 0.98) → **테이블/카메라 = +X 확정**(워크스페이스 박스 입력). 'a' 목표는 반대편(-X)이라 GO → 3 s quintic 정상 실행·유지·'g' 소프트중단 검증. **정밀도 발견: 정상상태 오차 ~16 cm**(도달 (-0.330,-0.194,0.866) vs 목표 (-0.181,-0.181,0.931)) — 무적분 CTC + 하모닉 마찰의 전형. **Phase 5 전 개선 필수**(게인/적분/도달 후 재타겟 반복 — 궤적 CSV는 B6 픽스로 분석 가능해짐) |
-| 5 캘리브+데모 | rPc→TF 정본화 → top-down R 확정 → 'v' 접근 데모 | ⬜ |
+| **5-1 캘리브 캡처** | 12~15자세, 회전 다양성 | ✅ (2026-07-27) **16쌍 lockstep**(grabber Enter→앱 's', 태그 검출시에만 저장). 재검출 16/16, 쌍별 회전각 중앙값 40.8°·92%≥15°, FOV x225~736/y45~426, 이동 스프레드 33×56×31 cm. 태그 = 36h11 id0, 검은 사각형 **65 mm**(흰테두리 포함 80 — 8:10 규격비 일치로 측정 교차확인) |
+| **5-2 AX=ZB solve** | rMc + residual | ✅ (2026-07-27, `8093e8a`) `calib_cpo.py`(IPPE_SQUARE, reproj 0.12~0.55 px, 모호성비 ≥2.8) → 원저자 `eye_to_hand_calib.py` 무수정 실행. **rMc t=(0.7612,-0.0997,0.9262), residual 1.81 cm/1.66°**. 손-프로브(0.698,-0.132,0.981)와 9 cm 정합(프로브는 ±10 cm짜리 참고치). eMo(플랜지→태그)도 동시 해결 — 태그 장착 실측 불필요 |
+| **5-3 TF+박스 정본화** | 파이프라인 반영 + 실좌표 검증 | ✅ (2026-07-27, ros2_ws `a9644dc`) launch TF quaternion 교체(§1.3), 브릿지 박스 실측치 x[0.30,0.85] y[-0.50,0.45] z[0.10,0.50](카메라 아래 >0.4 m 클리어). **실검증: apple → (0.841, -0.102, 0.179)** — x/y 이미지 기하 일치, z = 테이블(+0.10) + 사과 높이 표면값과 4 mm 일치. person_guard는 우측 케이블 FP(conf≤0.41, 36%)로 상시 래치 → **오퍼레이터 결정으로 off**(E12) |
+| 5-4 접근 데모 | 'v' 라이브 lock→approach | ⬜ 새 바이너리(실측 박스)로 앱 재시작 필요. top-down R 확정은 여전히 백로그(v1은 현재 자세 유지) |
 
 ## 6. 코드 변경 요약
 
@@ -162,13 +177,17 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 | `CRobot/AxisCIA402.h` | `GetEcatSlave()` 접근자 (DC ref 지정용) |
 | `tools/gate0_rtposix_test.c` | 1 ms 주기 지터 스모크(RT/NRT 폴백, warm-up 스킵) |
 | `tools/patches/rtposix-aarch64-stackmin.patch` | RT-POSIX 스택 버그 패치 보존본 |
+| `tools/calib_grab.py` | Phase 5 캡처 grabber — 파이프라인 압축토픽 구독, **태그 검출시에만 저장**(이미지 N ↔ 앱 pose_rPe_N lockstep 강제), camera_info 1회 저장(D12: 파이프라인과 동일 카메라 모델) |
+| `tools/calib_cpo.py` | 이미지→pose_cPo (36h11 + solvePnP IPPE_SQUARE + 모호성비 리포트). 코너 정밀화 **per-image 폴백**(B8) |
+| `App/CalibUtils/kv260/` | 16자세 데이터셋 + solve 결과(rPc.yaml/txt, 시각화) — 원저자 예제 데이터(상위 디렉토리)와 격리 |
 
 ### ros2_ws (main)
 
 | 파일 | 변경 |
 |---|---|
 | `src/pick_logic_pkg/.../pick_logic.py` | **v2**: L2 스코어 선택(conf/중앙/크기 가중) + `desired_class` LIVE 파라미터('':자동) + L3 안정성 3프레임·히스테리시스·5프레임 생존 + L4 근접 person 래치. 신규 reject 사유 3종. 게이트·metrics·yield CSV 계약 불변 |
-| `config/pick_logic.yaml` | v2 파라미터 블록(주석 포함) |
+| `config/pick_logic.yaml` | v2 파라미터 블록(주석 포함). **2026-07-27 `person_guard_enable: false`**(오퍼레이터 결정, E12 — 재활성 대안 주석 포함) |
+| `launch/pick_place_vitis_ai.launch.py` | `base_to_camera_tf` placeholder → **캘리브 실측치**(quaternion, §1.3) |
 | `tools/vision/test_pick_logic_v2.py` | 카메라-불필요 합성 검증(실노드+합성 DetectionArray, 시나리오 6종) |
 
 ## 7. 발견한 버그·함정 대장
@@ -200,6 +219,8 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 | E9 | IgH `ethercat master`의 **Lost frames는 감소 가능한 파생 통계**(지연 프레임이 뒤늦게 계상되면 ↓). PREOP→OP 활성화 천이 자체가 프레임 2개 정도 유실(정상) | 유실 판정은 **OP 도달 후 재베이스라인** + **증가 시에만 FAIL** |
 | E10 | **E-stop = 로봇측 버스 전원 차단**: eth0 Link DOWN + 슬레이브 0 → 앱은 "There are 0 Responding Slaves!"로 초기화 실패. 버튼이 물리 래치라 해제 전까지 지속 | 버튼 비틀어 해제 → 슬레이브 7 복귀·전축 0x0220 fault-free 확인(2026-07-26 실측) 후 재실행. E-stop 실효성 테스트로는 오히려 정석 경로 |
 | E11 | **rosidl typesupport는 런타임 dlopen** — 실행파일의 RUNPATH(-Wl,-rpath)가 dlopen 검색에 적용되지 않아 env 미소스 실행 시 `libmy_interfaces__..._fastrtps_cpp.so` 로드 실패(브릿지만 비활성, 앱은 진행) | 앱 실행은 항상 `App/Indy7/run.sh`(ROS env source + MALLOC_ARENA_MAX=2 + rtprio/memlock preflight) |
+| E12 | **person_guard 상시 래치 FP(2026-07-27)**: 테이블 우측 가장자리의 케이블/그림자 세로 영역이 conf 0.32~0.41 person으로 **36% 프레임**에서 오검출(area 0.08~0.10 ≥ 0.06) → 사람이 없어도 2 s 래치가 계속 갱신되어 타깃 전면 무효. 증거 프레임 확보 | **오퍼레이터 결정으로 guard off**(yaml). E-stop이 주 안전장치. 재활성 시 `person_min_confidence: 0.5`면 이 FP는 걸러짐(실측 FP max 0.41 — 근접 실사람은 통상 그 이상) |
+| B8 | `CORNER_REFINE_APRILTAG`이 기본 검출기가 잡는 마커를 **떨어뜨릴 수 있음**(image0012). cPo 하나가 비면 기존 solver의 `sorted(glob)` zip 페어링이 **그 뒤 쌍 전부를 조용히 어긋나게 함**(사전순 정렬이라 1,10,…,16,2,… 순서 — 인덱스 결번 시 재앙) | `calib_cpo.py`가 정밀화 방법을 per-image 폴백(APRILTAG→SUBPIX→기본)으로 시도해 결번 자체를 방지 + 16/16 강제 |
 
 **안전 제약 (실기 확인, 2026-07-26)**: **팔 전방-하강 경로에 카메라 마운트가 있어 충돌 가능**
 (오퍼레이터 실측 확인). → 'a' 위치추종의 하드코딩 목표 검증 선행, Phase 5 워크스페이스 박스에
@@ -230,10 +251,15 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 ## 9. 남은 것
 
 - ~~위치 정확도 개선~~ **완료(2026-07-27)**: refine으로 **10.9 mm** — §5 표, `0668ed2`
-- **Phase 5**: 손-눈 캘리브(파이프라인 토픽 캡처 + 데스크톱 OpenCV solve, D12; **플랜지
-  AprilTag 부착 확인됨**) → TF 정본화 → 워크스페이스 박스 실측치 교체(**카메라 존 = +X 0.70
-  높이 0.98 부근 배제**, 테이블=+X 확정) → top-down R 확정 → `'v'` 접근 데모. 라이브 lock은
-  person_guard 때문에 **카메라 시야 밖에서**
+- ~~Phase 5-1~5-3~~ **완료(2026-07-27)**: 캘리브 → rMc → TF/박스 정본화 → apple 실좌표 검증
+  — §5 표, `8093e8a`/`a9644dc`. person_guard는 E12로 off(라이브 lock에 시야 제약 없어짐)
+- **Phase 5-4**: `'v'` 접근 데모 — 앱을 **새 바이너리로 재시작**(실측 박스 반영) 후 실행
+- **grav-comp 개선(원인 특정됨)**: 말단 **F/T 센서(+태그 브라켓) 질량이 URDF에 없음** →
+  팔을 뻗으면 잔차 토크 > stiction으로 서서히 침하(오퍼레이터 실물 관찰). ① 센서 무게/모델
+  확보해 URDF link6 반영(CTC droop도 동시 감소 기대), ② grav-comp에 sticky-float 앵커
+  (dead-band 밖 추종/안 밀면 고정) — 손유도 감각 유지하며 침하 정지
+- 물리 확인 대기: **테이블면-베이스 높이차 ~10 cm**(depth 실측 +0.096) 실측 대조,
+  apple 수평거리 ~85 cm 줄자 확인
 - isolcpus 3+1 A/B는 계속 보류(D10 — 서보온 런에서도 문제 신호 없음)
 - **백로그**: 연속 추적(closed-loop), MuJoCo sim 합류, indy_iface GUI, isolcpus 3+1
   (cmdline `isolcpus=3 nohz_full=3 rcu_nocbs=3 irqaffinity=0-2` + 앱 태스크 CPU3 pin),
