@@ -78,6 +78,7 @@ Detect objects via vision → compute 3D pick position → generate robot trajec
 | RT 커널 — 인수인계 상세 | `docs/rt/rt_patch.md` | 전 과정·함정·복구(정정 이력 겹겹) |
 | **RT 크래시 — 종합 보고서** | `docs/rt/rt_kernel_postmortem.md` | 증상→오진→진단→원인→해결→교훈. **RT 문제는 여기부터** |
 | RT 크래시 — 진단 상세·전략 | `docs/rt/rt_kernel_fix_plan.md` | 원인 규명 과정·근거 링크·전략 비교 |
+| **RAON-RT 병합 — 로봇제어(Indy7) 통합** | `docs/RAON-RT/merge.md` | **병합 트랙 정본(2026-07-26~)**. 목표/결정/Phase·Gate/버그 대장/재개 가이드 |
 | **RPU/EtherCAT — 새 세션 진입점** | `docs/rpu/rpu_guide_for_claude.md` | RPU 작업이면 **여기부터**(함정 지도) |
 | RPU 실행 계획(Gate 1~5) | `docs/rpu/rpu_freertos_soem_execution_plan.md` | 명령어·게이트 |
 | RPU 논리 전개 | `docs/rpu/rpu_plan.md` | 왜 이 선택인가 |
