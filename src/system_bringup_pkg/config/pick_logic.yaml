@@ -44,7 +44,12 @@ pick_logic_node:
     hysteresis_frames: 3
     # 근접 person 래치: person bbox가 화면의 area_ratio 이상이면(=가까움)
     # clear_sec 동안 모든 타깃 무효화(reason=person_guard).
-    person_guard_enable: true
+    # 2026-07-27 OFF (오퍼레이터 결정): 테이블 우측 가장자리 케이블/그림자가
+    # conf 0.32~0.41 person으로 36% 프레임에서 오검출 → 래치가 상시 걸림
+    # (증거: scratchpad person_fp.png). 사람 없는 상태에서 재현. 주 안전장치는
+    # E-stop. 재활성 시 대안: person_min_confidence 0.5로 올리면 이 FP는
+    # 걸러짐(실측 FP max 0.41; 근접한 실제 사람은 통상 그 이상).
+    person_guard_enable: false
     person_class_name: "person"
     person_min_confidence: 0.3
     person_area_ratio_threshold: 0.06
