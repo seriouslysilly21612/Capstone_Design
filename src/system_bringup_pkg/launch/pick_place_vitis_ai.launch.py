@@ -192,18 +192,23 @@ def launch_setup(context, *args, **kwargs):
         # the live realsense camera_link->color_optical TF. Quaternion form
         # on purpose — the equivalent RPY sits near the pitch=90 deg gimbal
         # singularity. Raw data + solver: RAON-RT-Revision/App/CalibUtils/kv260/
+        # 2026-07-27 E21 correction: the arm incidents shoved the ROBOT BASE
+        # (planar rigid: yaw +5.14 deg, t (+4.5, +10.4) cm — hand-probe fit,
+        # apple+tennis residual 0.2 mm, banana check 2.1 cm ~ its own shape
+        # ambiguity). Composed here via tools/base_shift_fit.py (RAON repo);
+        # the camera itself did not move.
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
             name='base_to_camera_tf',
             arguments=[
-                '--x', '0.761822',
-                '--y', '-0.084713',
+                '--x', '0.811666',
+                '--y', '0.087684',
                 '--z', '0.924974',
-                '--qx', '0.72390457',
-                '--qy', '-0.03237801',
-                '--qz', '-0.68876782',
-                '--qw', '0.02264346',
+                '--qx', '0.72462829',
+                '--qy', '0.00008362',
+                '--qz', '-0.68706199',
+                '--qw', '0.05347582',
                 '--frame-id', 'base_link',
                 '--child-frame-id', 'camera_link',
             ],
