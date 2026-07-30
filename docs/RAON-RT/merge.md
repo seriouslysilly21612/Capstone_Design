@@ -511,10 +511,13 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   이 차이를 기억할 것
 - ~~접근 궤적 자동 기록·3계열 그래프~~ **구현 완료(2026-07-30, RAON `592998e`) — 실기 최종 확인 대기**:
   접근마다 **DataLog 1파일 = 접근 1회**가 자동 생성되고, 워처가 `approach_NNN_<class>_traj.png`
-  (3D 경로 + X/Y/Z(t) 3계열 + 목표거리 패널)를 만든다. 3계열 = **IK 입력**(goal+refine 편향
-  스텝) / **FK(q_ref)**(레퍼런스) / **FK(q_act)**(실측) — refine이 왜 2~3 pass 필요한지를
+  (3D 경로 + **시작점 기준 변위 |P(t)−P0| 1패널** + 목표거리 패널; X/Y/Z 3패널은 07-30
+  사용자 요청으로 변위 1패널에 병합, RAON `bd01c6d`)를 만든다. 3계열 = **IK 입력**(goal+refine
+  편향 스텝) / **FK(q_ref)**(레퍼런스) / **FK(q_act)**(실측) — refine이 왜 2~3 pass 필요한지를
   그림 한 장으로 보여주는 도구(ref는 명령점에 도달, act는 못 미침 = CTC 무적분+stiction;
   편향 스텝이 ref를 goal 너머로 밀어 act를 goal에 얹는 과정이 수직 점선으로 표시).
+  변위는 방향을 접으므로 "변위 같음 ≠ 도달"(측면 miss 불가시) — 진짜 오차 판정은 아래
+  목표거리 패널과 제목의 final miss가 담당하고, 축별 방향 정보는 3D 경로와 DataLog CSV에 남는다.
   - **RT 비용 신규 0**: 접근이 **기존 'l'/'a'/RECT 로깅 블록**(FK 1회+락프리 링 push, 실기
     1 kHz 검증 완료)을 켜는 것뿐. 엣지에서 atomic 스토어 2회 추가가 전부. 파일 IO는 prio 30
     Logger 태스크, FK 재계산·작도는 별도 오프라인 프로세스
