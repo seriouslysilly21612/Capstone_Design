@@ -671,7 +671,10 @@ ioctl이 그 semaphore에서 대기(상속 없음=무한 역전) → TASK0 연�
 내내(66%까지). 궤적은 실행 사이클로 흘러 4배 슬로모션+스터터. **왜 이제서야**: 이전
 세션들은 보드가 조용했음 — 07-30 20:32 첫 로그 7.3% 갭이 미니어처 전조.
 **처방**: ① 앱 시작 후 `sudo chrt -f -p 40 $(pgrep -x EtherCAT-OP)` (OP 스레드는 앱마다
-재생성되므로 세션마다; IDLE도 무해) ② 실기 세션 중 보드에서 빌드/무거운 분석 금지(운영
+재생성되므로 세션마다; IDLE도 무해) — **자동화 완료(07-31, RAON `6c090ae`)**: run.sh가
+백그라운드 워처로 OP 스레드 출현을 기다려 고정 명령 wrapper(`/usr/local/sbin/ecat-op-fifo`,
+sudoers NOPASSWD)를 호출. **1회 설치 필요**: `sudo bash tools/install_ecat_op_fifo.sh`
+(미설치면 앱 콘솔에 수동 명령 WARN) ② 실기 세션 중 보드에서 빌드/무거운 분석 금지(운영
 수칙, 에이전트 포함) ③ 장기적으론 IgH master 스레드 FIFO화 패치/재빌드 옵션.
 **#40 데이터는 FF-gate 판정에 사용 금지.**
 
