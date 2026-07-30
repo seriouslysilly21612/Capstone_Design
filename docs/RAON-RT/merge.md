@@ -556,6 +556,18 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   stiction·leash와 얽혀 limit-cycle 위험, **refine이 이미 이산 적분기로 수렴 실증**(finals 5.2~11.5 mm).
   다음 후보: 마찰 feedforward(sign(qd_ref)·Coulomb, j3≈7 Nm급) 또는 손목 Kp 인상/PD-outside-M
   (eFullDynamics 모드가 코드에 이미 존재).
+- **E32 — Kd 실험 세션(#27~29, 07-31 00:25)이 RT 스톨로 오염**: "이동 4배 느림+덜덜"의 원인은 Kd가
+  아니라 **1 kHz 루프가 주기의 ~73%를 상실**(Δt median 1.000 ms인데 27~29%가 1.5 ms 초과,
+  최대 120~164 ms; 직전 세션까지는 전 로그 0.0%). 궤적 시간은 실행 사이클로 흐르므로
+  (`t_elapsed += m_dt`) 3.4 s 궤적이 벽시계 12.7 s로 늘어짐 — 12.70 s 시점까지 실행 사이클 3,350개
+  = 3.35 "궤적 초"로 정확히 일치. "덜덜" = 1 ms 스텝 사이 수십 ms 토크 동결이 반복되는 스터터.
+  refine 지연 9 s도 같은 원인(REFINE_VEL_EPS 게이트가 crawl 지속으로 리셋). **#27~29의 정확도
+  수치(first 39.7/54.1/27.6)는 Kd 판정에 사용 금지** — 실험 재실시 필요. 커널 로그 무특이
+  (EtherCAT 에러는 종료 시퀀스뿐, RT throttling은 07-26 다른 부팅, UVC 에러는 만성). cfg 핀
+  CPU=3 무결, isolated=3 유지. 격리 절차: 같은 launch(run.sh)로 접근 1회 → 새 DataLog Δt 확인 →
+  재발 시 Kd 원복 후 재확인(재발=환경/세션 문제, 소멸=Kd→드라이브 상호작용 → 콘솔 EMCY 스팸·
+  `ethercat master` Lost Frames 확인). 참고: 07-30 20:32 세션 첫 로그도 7.3%/8 ms 경미 갭 —
+  구가끔 있던 현상이 이 세션에 전면화된 것일 수 있음.
   **첫 실기 판독 성과 — settle leash 발견**: banana #23에서 one-shot plan 끝의 "+6.4 mm 상승"을
   DataLog로 추적 → pass-1 계획은 t=2.97에 목표 0.00 mm 도달, 궤적 시간 종료 순간 `MAX_REF_LEAD
   0.15 rad`(FullDynControllerRT.cpp:1417, 궤적 종료 후 reference가 실측보다 0.15 rad 이상 앞서지
