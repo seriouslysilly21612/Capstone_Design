@@ -599,12 +599,7 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   **처방**: ① 앱 시작 후 `sudo chrt -f -p 40 $(pgrep -x EtherCAT-OP)` (OP 스레드는 앱마다 재생성되므로
   세션마다; IDLE도 무해) ② 실기 세션 중 보드에서 빌드/무거운 분석 금지(운영 수칙) ③ 장기적으론 IgH
   master 스레드 FIFO화 패치/재빌드 옵션. **#40 데이터는 FF-gate 판정에 사용 금지** — 재실험 필요.
-  **검증 완료(#41~46, 07-31 02:00)**: 6/6 로그 갭 0.0%(E34 처방/조용한 보드 하) + **E33 FF-gate 실증** —
-  발산 소멸(refine 1~2회, final 3.45~9.57 mm 전원 합격, j3 캐터펄트 패턴 소멸), FF의 큰-이동 이득 유지
-  (apple 17.2 vs pre-FF ~50 / tennis 17.4 vs ~43 / orange 31 vs 37~94 mm). banana 47(z/j4 지배, KF_4=0
-  이라 불변=예상대로). ⚠️ **mustard 1차 미스는 FF 시대에 일관 악화**(26→57.7 mm, #39·#46 동일) —
-  j3 FF가 mustard 접근 방향에서 역효과인지 배치 변화인지 미해명(수렴은 정상이라 운영 지장 없음).
-  다음 후보: KF_4≈1.5 시험(FF-gate가 refine을 보호하므로 이전보다 안전) + mustard 방향성 조사.
+- **E33 — FF 1차 실기(#34~39): 큰 이동 대성공, refine 미세 이동에서 leash-release 캐터펄트 발산
   → 스코프 게이트로 해결(`9ba929d`)**: 큰 이동은 극적 개선(tennis first 9.97 mm·refine 0회 역대
   최고, apple 20 vs 50 mm) — 그러나 #34/38/39는 refine 6회 상한 소진 후 **final이 first보다 악화**
   (73/59/73 mm), 육안으론 "마지막에 좌우 왕복". 메커니즘: 첫 이동이 leash(0.15 rad)에 물린 채 끝나면
@@ -639,6 +634,26 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
     (pandas 없음·`plt.show()` 블로킹·세션 단위 대상)라 워처에 numpy+matplotlib로 이식
   - ⚠️ 실기 미검증 항목: 앱 쪽 arm/close 프로토콜(트리거 엣지)·55 s 캡. 다음 실기 세션에서
     접근 1회면 자동 확인됨. DataLog는 접근당 수 MB — `rt_log_results/` 주기 정리 필요
+- **검증(#41~46, 07-31 02:00) + E35 — FF 소이동 과주(mustard 미스터리 해명, RAON `90e5409`)**:
+  6/6 로그 갭 0.0%(E34 처방·조용한 보드) + E33 게이트 실증(발산 소멸, refine 1~2회, final
+  3.45~9.57 mm 전원 합격, refine 패스의 j3 act/cmd ≈ 0 복귀), FF 큰-이동 이득 유지(apple 17.2
+  vs pre-FF ~50 / tennis 17.4 vs ~43 / orange 31 vs 37~94 mm), banana 47 불변(z=j4 몫,
+  KF_4=0=예상대로). ⚠️였던 **mustard 1차 미스 26→58 mm 일관 악화는 DataLog로 해명 = E35**:
+  pre-FF(#26/#32)는 pass-1 종료 시 j3가 +0.06~0.09 rad **뒤처져** 정지(stiction 미달)인데
+  FF(#46)는 j3가 cmd 0.28 rad 이동을 **0.41 rad 주행**(144%), 최종 ref를 +0.13 rad **지나쳐**
+  정지 — 부호 반전이 그대로 +36 mm y-미스(레버 ~0.28 m, CSV의 y +36.5와 일치). 메커니즘:
+  **이동량이 작으면**(mustard만 j3 0.1~0.3 rad) 감속 구간까지 유지되는 풀 FF(+5 Nm)를 관성이
+  소화 못 해 과주하고, settle은 q̇_ref=0→FF=0이라 stiction이 과주 지점에 고정(**편도 티켓** —
+  FF는 밀어주긴 해도 되돌려주진 못함). 다른 물체는 j3 이동이 커서 순이득이었던 것. **수정 =
+  lag gate**(`90e5409`): FF 항에 `clamp((q_ref−q)·sign(q̇_ref)/0.002, 0, 1)` 곱 — 관절이 명령
+  방향으로 **뒤처진 동안만** FF(존재 이유인 stiction 상황; 실측 중이동 lag 0.01~0.13 rad라
+  견고히 1), 따라잡거나 앞서면 0(그때 마찰 제동은 아군). 연속형이라 토크 챠터 없음, 정지 시
+  0 불변, E33 스코프 게이트는 이중 방어로 유지. **KF_4=1.5 동시 투입**(cfg만, 커밋 안 함) —
+  j4 이동도 전형적 소이동이라 같은 함정인데 lag gate가 선방어. 참고: 전 mustard 로그에서
+  pass-1 j4 오차 = 정확히 **+0.150 rad(leash 핀)** — j4는 비행 중에도 전혀 안 움직였음
+  (act d = −0.000). 빌드 완료·실기 대기: 기대 = mustard first ~26 mm 이하 복원 + j4 첫 이동
+  (banana/mustard z-미스 +23~44 mm 감소). 판독 스크립트: scratchpad `mustard_ff_analysis.py`
+  (pass 경계 = goal 점프, pass-1 종료 관절오차 + overshoot 추적).
 - **파지 단계 준비**: TCP 재정의(현 원점은 태그면 안쪽 29 mm — 그리퍼 TCP로 이동, E16),
   <5 mm 정밀도(게인/적분 검토, refine 바닥 12 mm), top-down 고정 R, 물체 6D pose
   estimation(나중 — 들어오면 soft-R 타깃만 물체 기준으로 교체)
