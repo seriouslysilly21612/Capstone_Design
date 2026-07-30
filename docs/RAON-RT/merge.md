@@ -662,8 +662,9 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   0.152 요구 → 0.092(60%) 이동. τ4 정량: 중력 유지 **+2.8 Nm**, +이동 시 PD+FF 최대 5.1 Nm
   = 잉여 2.3 Nm < stiction(미동), −이동은 중력이 아군이라 1.5로 충분했던 것. **KF_4
   1.5→3.0**(cfg) = 잉여 ~3.8 Nm — lag gate가 과주 상한이라 인상 안전. 참고: 전 접근은
-  HOME 출발 궤적(데모 플로우가 ready 경유라 물체→물체 직행 레그는 현재 존재하지 않음 —
-  파지 후 place→ready 레그가 생기면 그때 1회 검증).
+  HOME(ready) 출발 궤적(시작 TCP 5/5 동일 0.63/0.10/0.35). **물체→물체 직행도 동작함**
+  (07-31 사용자 수동 확인; 궤적은 항상 m_Q에서 시작 + D13 시드는 q_ready 고정이라 출발
+  자세 무관) — 해당 approach 번호를 받으면 원샷 품질 판독 예정.
 - **파지 단계 준비**: TCP 재정의(현 원점은 태그면 안쪽 29 mm — 그리퍼 TCP로 이동, E16),
   <5 mm 정밀도(게인/적분 검토, refine 바닥 12 mm), top-down 고정 R, 물체 6D pose
   estimation(나중 — 들어오면 soft-R 타깃만 물체 기준으로 교체)
