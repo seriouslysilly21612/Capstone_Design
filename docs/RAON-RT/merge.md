@@ -512,8 +512,9 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 - ~~접근 궤적 자동 기록·3계열 그래프~~ **구현 완료(2026-07-30, RAON `592998e`) — 실기 최종 확인 대기**:
   접근마다 **DataLog 1파일 = 접근 1회**가 자동 생성되고, 워처가 `approach_NNN_<class>_traj.png`
   (3D 경로 + **시작점 기준 변위 |P(t)−P0| 1패널** + 목표거리 패널; X/Y/Z 3패널은 07-30
-  사용자 요청으로 변위 1패널에 병합, RAON `bd01c6d` · **one-shot plan 곡선** 추가 `0550e47` —
-  1차 pass의 reference를 끝점 고정 연장한 "원래 원했던 한 방 궤적", 새 계산 없이 로그에서 추출;
+  사용자 요청으로 변위 1패널에 병합, RAON `bd01c6d` · **one-shot plan 곡선** 추가 `0550e47`+`9606588` —
+  1차 pass의 reference를 끝점 고정 연장한 "원래 원했던 한 방 궤적", 새 계산 없이 로그에서 추출,
+  3D 패널에도 파란 곡선+계획 끝점 X 마커로 표시;
   pass-1 경계는 goal 스텝 크기 <80 mm 휴리스틱으로 refine 편향/staging leg-2를 구분)를 만든다. 3계열 = **IK 입력**(goal+refine
   편향 스텝) / **FK(q_ref)**(레퍼런스) / **FK(q_act)**(실측) — refine이 왜 2~3 pass 필요한지를
   그림 한 장으로 보여주는 도구(ref는 명령점에 도달, act는 못 미침 = CTC 무적분+stiction;
