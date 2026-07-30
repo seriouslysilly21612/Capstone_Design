@@ -654,6 +654,16 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   (act d = −0.000). 빌드 완료·실기 대기: 기대 = mustard first ~26 mm 이하 복원 + j4 첫 이동
   (banana/mustard z-미스 +23~44 mm 감소). 판독 스크립트: scratchpad `mustard_ff_analysis.py`
   (pass 경계 = goal 점프, pass-1 종료 관절오차 + overshoot 추적).
+  **실기 검증(#47~51, 07-31 02:25)**: **원샷 3/5 달성** — apple 9.9 / banana **47→7.9** /
+  mustard **58→6.5 mm**, 전부 refine 0회(E35+KF_4 적중; j3는 1.31 rad 이동 97% 추종, lag
+  +0.040으로 과주 없음 = lag gate 실증). 잔여 = orange 33.8(refine 2)·tennis 31.2(refine 1),
+  **원인 = j4 방향 비대칭**: 두 물체 모두 j4 **+방향**(반중력) 0.13~0.14 rad 요구 → act
+  +0.003~0.007(전혀 breakaway 못 함, j5 leash 핀은 roll이라 위치 기여 0), banana는 **−방향**
+  0.152 요구 → 0.092(60%) 이동. τ4 정량: 중력 유지 **+2.8 Nm**, +이동 시 PD+FF 최대 5.1 Nm
+  = 잉여 2.3 Nm < stiction(미동), −이동은 중력이 아군이라 1.5로 충분했던 것. **KF_4
+  1.5→3.0**(cfg) = 잉여 ~3.8 Nm — lag gate가 과주 상한이라 인상 안전. 참고: 전 접근은
+  HOME 출발 궤적(데모 플로우가 ready 경유라 물체→물체 직행 레그는 현재 존재하지 않음 —
+  파지 후 place→ready 레그가 생기면 그때 1회 검증).
 - **파지 단계 준비**: TCP 재정의(현 원점은 태그면 안쪽 29 mm — 그리퍼 TCP로 이동, E16),
   <5 mm 정밀도(게인/적분 검토, refine 바닥 12 mm), top-down 고정 R, 물체 6D pose
   estimation(나중 — 들어오면 soft-R 타깃만 물체 기준으로 교체)
