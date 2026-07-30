@@ -567,7 +567,14 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   CPU=3 무결, isolated=3 유지. 격리 절차: 같은 launch(run.sh)로 접근 1회 → 새 DataLog Δt 확인 →
   재발 시 Kd 원복 후 재확인(재발=환경/세션 문제, 소멸=Kd→드라이브 상호작용 → 콘솔 EMCY 스팸·
   `ethercat master` Lost Frames 확인). 참고: 07-30 20:32 세션 첫 로그도 7.3%/8 ms 경미 갭 —
-  구가끔 있던 현상이 이 세션에 전면화된 것일 수 있음.
+  구가끔 있던 현상이 이 세션에 전면화된 것일 수 있음. **해소(#30, 00:44)**: 앱 재시작만으로 갭 0.0%
+  복귀 — 원인 미상의 일회성 세션 문제로 종결(재발 시 위 격리 절차). **Kd 실험 최종 판정(#30, 유효
+  데이터)**: 챠터 없음(qd 고주파 rms가 구 게인보다 오히려 감소 0.0036→0.0021), 타이밍 정상, 그러나
+  **first miss 불변 39.7 mm**(j4 여전히 leash −0.15, z +39.6 순수 잔존) — 예측대로 **Kd는 정지
+  잔차에 무효, 지렛대 아님**. row24→30의 y 오차 소멸(−22.7→+1.9)은 Kd가 아니라 물체 배치/IK 해가
+  j3 요구를 0.247→0.041 rad로 줄인 효과(오염됐던 #27과 #30의 miss 벡터가 동일한 것이 증거).
+  게인은 28/25/20 유지 권고(무해+마찰 FF 도입 시 감쇠 여유). 다음 지렛대 = 마찰 feedforward
+  (j3 breakaway ~7 Nm부터) 또는 손목 토크 권한(j4).
   **첫 실기 판독 성과 — settle leash 발견**: banana #23에서 one-shot plan 끝의 "+6.4 mm 상승"을
   DataLog로 추적 → pass-1 계획은 t=2.97에 목표 0.00 mm 도달, 궤적 시간 종료 순간 `MAX_REF_LEAD
   0.15 rad`(FullDynControllerRT.cpp:1417, 궤적 종료 후 reference가 실측보다 0.15 rad 이상 앞서지
