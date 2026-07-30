@@ -519,8 +519,10 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   **원점 재정의(`a09f129`)**: 3D의 `+`는 bias 포함 **최종 조준점**이라 X와 안 겹치는 게 정상 —
   ○(**원래 목표**=호버점, 첫 refine 편향 직전의 goal) 마커를 추가해 X가 ○ 위에 포개지는 것(≤2 mm,
   IK Accept 잔차)이 정상 판독이 되게 함.
-  **최종 레이아웃 = 사용자 스펙 2패널 고정(`3bc5336`)**: ① 3D = **one-shot plan(이론)과 actual(실제)
-  둘만**(reference 선 제거; 재조준은 actual 경로와 세로 점선으로 보임) + ○/`+`/start 마커,
+  **최종 레이아웃 = 사용자 스펙 2패널 고정(`3bc5336`, 마커 정리 `b884069`)**: ① 3D = **one-shot
+  plan(이론)과 actual(실제) 둘만**(reference 선 제거; 재조준은 actual 경로와 세로 점선으로 보임) +
+  마커는 ○(원래 목표)·start만 — 계획 끝점 X는 ○와 ≤2 mm 중복이라 삭제, `+`(final aim)도 사용자
+  요청으로 삭제(bias 수치는 필요시 CSV/재조준 스텝에서),
   ② displacement 1개 plot = **IK 입력(호버점, 점이므로 수평선)/FK(q_ref)/FK(q_act) 3계열**.
   목표거리 패널은 스펙에 따라 제거 — miss 수치는 제목 final miss와 정확도 PNG가 담당.
   **RECT 빌린 스모크 입력 은퇴**: goal 열이 무의미한 임시 입력이었고 측정 로직 문제가 아니었음 —
