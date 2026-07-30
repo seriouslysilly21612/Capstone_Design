@@ -290,7 +290,7 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 | `App/Indy7/Indy7Ctrl.{h,cpp}` (키) | **캘리브 캡처 게이트(2026-07-29, `416da9a`) — 실기 검증 완료(같은 날)** — `s`가 진단 출력처럼 보이면서 hand-eye 데이터셋을 무조건 덮어쓰던 것(원저자 `d38e9ec` 유래)을 `m_bCalibMode` 뒤로 가둠. `w`/`W`로 토글, **매 실행 OFF**. 쓰기 호출부는 `case 's'`의 2줄뿐이라 가드 하나로 완결(전 저장소 grep 확인). 배너는 `DoInput`이 **1 kHz RT 스레드**라 printf 1회로 합침 — 파일 IO가 RT 스레드에 있는 건 원래부터이고, 이 변경으로 기본 경로에서는 사라짐. ⚠️ `w`가 유일한 자유 알파벳이었다(`q`·`z`는 `proc_keyboard_control`이 선점). **오퍼레이터가 로봇에서 직접 확인**: 무장 전 `s` → `App/CalibUtils/kv260/` 무변경, `w` 무장 → `s` → 변경 발생, `w` 해제까지 전체 시퀀스 정상 |
 | `App/Indy7/CalibCapture.{h,cpp}` | **ViSP-free 재작성** — Eigen `AngleAxisd`로 theta-u 변환, `vpPoseVector::saveYAML` 포맷 호환(→ `eye_to_hand_calib.py` 무수정 소비) |
 | `App/Indy7/FullDynControllerRT.{h,cpp}` | x86 SSE 헤더 `__SSE__` 가드 (aarch64 빌드 차단 해소) · **E13 3중 방어**(soft-R IK·Δq 게이트·T 스케일링, FK 잔차 합격판정) · `IsTrajectoryRefDone()`(B7) · **sticky-float 홀드**(dead-band 앵커+속도게이트, 'k') · **ready-seed IK**(`ComputeReadySeed`/`SolveReadyIK`/2π 폴딩+관절한계/`ScaledTrajTime`, D13) |
-| `App/Indy7/indy7.urdf` | tcp 링크에 F/T 페이로드 **285 g @ CoM (−0.021,0,0)** — 공구축이 tcp 프레임 **−X**라는 경고 주석 포함(E16) |
+| `App/Indy7/indy7.urdf` | tcp 링크에 F/T 페이로드 **285 g @ CoM (−0.021,0,0)** — 공구축이 tcp 프레임 **−X**라는 경고 주석 포함(E16) → **2026-07-30 A/B로 페이로드 제거**(`49ac6db`, 0 g 복귀): 어댑터판 질량이 추정치였고 CoM 축(−X)도 07-29 실물 확인(+Z)과 모순 — 1차 착지가 **위(+z)** 로 뜨는 원인 후보. kinematics 불변(fk_replay byte-identical)이라 캘리브·reach map 유효. 복원=`git checkout 9dc5ae3 -- App/Indy7/indy7.urdf` |
 | `App/Indy7/Makefile` | ViSP/librealsense/OpenCV/PCL 제거, `RBDL_DIR` override 추가 · **Gate 2b**: humble+my_interfaces 배선(E5의 include **화이트리스트** 방식), rpath 내장(ROS env source 불필요), `make gate2b_test` 타깃 |
 | `App/Indy7/ROS2PickBridge.{h,cpp}` | **신규(Gate 2b)** — `/pick_target_base`·`/detections` 구독 + `AsyncParametersClient`로 `desired_class` LIVE 설정. 스레딩 계약: ROS2 I/O·메뉴·통계게이트는 브릿지 자체 non-RT 스레드(spin+worker), RT는 wait-free 원자 API+SPSC goal 슬롯만. `SignalHandlerOptions::None`(앱 SIGINT 보존). 게이트: N=15, 축별 std<8 mm, 워크스페이스 박스 실측치+**radial 게이트 r≤0.80**, z마진 0.15 m · E14 세션 위생(lock 방송 세션화·lost 1 s 디바운스·desired_class 자동 초기화) · 메뉴 HOME 기록 항목 · 박스 상수 public(ready-seed 프로브 파생용) · **접근 리포트 메일박스**(2026-07-29, `ApproachReport`/`LogApproach`/`TickApproachLog`) — seed-persist와 동일 SPSC 계약, RT는 POD 채우고 반환·워커가 시각 스탬프+CSV append. 슬롯 점유 중 재요청은 **드롭**(RT 블로킹 금지) |
 | `tools/approach_plot.py` | **신규(2026-07-29)** — 접근 정확도 그래프 자동 생성. `approach_log.csv`를 폴링해 접근 1회당 PNG 1장과 누적 `approach_history.png`. 구성: **① 3D 목표-vs-도달**(원점=목표, 5/12 mm 허용 구, ±15 mm로 확대) **② 실척 측면도**(물체·호버 150 mm·도달을 축척 그대로 — 3D 패널엔 물체를 못 넣는다, 10배 축소하면 mm가 사라지므로) **③ 축별 막대 ④ 숫자 패널**. **앱이 직접 그리지 않는 이유**: `mlockall` + 1 kHz RT 프로세스에서 `fork()`는 전 쓰기페이지를 COW로 표시해 **RT 스레드의 다음 쓰기가 폴트**를 먹는다 → 별도 프로세스 폴링. `run.sh`가 `--watch --exit-with-parent`로 자동 기동(`exec`이 셸을 앱으로 치환하므로 워처의 부모 = 앱 → 앱 종료시 자동 회수). `INDY7_NO_PLOT=1`로 끔. matplotlib+numpy만 사용(pandas 보드에 없음), 라벨 전부 영문(한글 폰트 부재) |
@@ -527,7 +527,15 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   목표거리 패널은 스펙에 따라 제거 — miss 수치는 제목 final miss와 정확도 PNG가 담당.
   **RECT 빌린 스모크 입력 은퇴**: goal 열이 무의미한 임시 입력이었고 측정 로직 문제가 아니었음 —
   `tools/traj_plot_selfcheck.py`(합성 접근: droop 37 mm·0.65 재조준·IK 잔차 2 mm를 plot_traj에 직접
-  주입)로 대체, 기하 검증: X-○ 1.6 mm 포개짐·`+` 24 mm 분리·final miss 8.1 mm=제목 일치. 3계열 = **IK 입력**(goal+refine
+  주입)로 대체, 기하 검증: X-○ 1.6 mm 포개짐·`+` 24 mm 분리·final miss 8.1 mm=제목 일치.
+  **실기 검증 완료(2026-07-30 저녁)**: 접근 23건+ 그래프 자동 생성, 실데이터 교차검증 배지 0.002 mm.
+  **첫 실기 판독 성과 — settle leash 발견**: banana #23에서 one-shot plan 끝의 "+6.4 mm 상승"을
+  DataLog로 추적 → pass-1 계획은 t=2.97에 목표 0.00 mm 도달, 궤적 시간 종료 순간 `MAX_REF_LEAD
+  0.15 rad`(FullDynControllerRT.cpp:1417, 궤적 종료 후 reference가 실측보다 0.15 rad 이상 앞서지
+  못하게 당기는 토크 상한 leash)가 발동해 **손목 pitch(q4) reference를 1.69° 회수**(레버암 ~22 cm
+  → TCP +6.4 mm). 원인은 q4가 stiction으로 **10.3° 뒤처진 채 정지**한 것 — first miss 46 mm의
+  주범이 손목 pitch 걸림임을 그래프+로그가 직접 지목. 1차 착지가 목표보다 **위(+36 mm)** 인 것은
+  중력 과보상 방향과 일치 → F/T 페이로드 A/B 제거 실험으로 연결(위 파일 표 참조). 3계열 = **IK 입력**(goal+refine
   편향 스텝) / **FK(q_ref)**(레퍼런스) / **FK(q_act)**(실측) — refine이 왜 2~3 pass 필요한지를
   그림 한 장으로 보여주는 도구(ref는 명령점에 도달, act는 못 미침 = CTC 무적분+stiction;
   편향 스텝이 ref를 goal 너머로 밀어 act를 goal에 얹는 과정이 수직 점선으로 표시).
