@@ -575,6 +575,15 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   j3 요구를 0.247→0.041 rad로 줄인 효과(오염됐던 #27과 #30의 miss 벡터가 동일한 것이 증거).
   게인은 28/25/20 유지 권고(무해+마찰 FF 도입 시 감쇠 여유). 다음 지렛대 = 마찰 feedforward
   (j3 breakaway ~7 Nm부터) 또는 손목 토크 권한(j4).
+- **Coulomb 마찰 feedforward 구현(2026-07-31, RAON `00c6d2c`, 빌드 완료·실기 대기)**:
+  `τ += KF_i·sat(q̇_ref,i/0.01)` 을 **M(q) 곱 바깥**에 추가(마찰은 관절 토크지 가속도가 아님 —
+  inertia-scaled PD가 손목에서 지는 바로 그 이유). **q̇_ref 게이트**라 정지 시 정확히 0
+  (버즈·적분식 헌팅 원천 불가, 실측 속도 부호 노이즈 면역), 0.01 rad/s 포화 램프로 시작/끝
+  토크 계단 제거. cfg `[SYSTEM] KF_n`(키 없음=0.0=기능 꺼짐, 동작 불변), 코드 클램프 [0,12] Nm.
+  배선: ConfigRobot(vKf) → Indy7Ctrl(dof==6) → SetFrictionFF. RT 비용 = 사이클당 곱셈 몇 개.
+  **1차 현장값: KF_3=5.0**(j3 breakaway 7.2~10.6의 ~70%, 일부러 미달 — FF는 돕기만, 스스로
+  끌지 않게)만 켜고 접근 A/B. 기대: j3 이동 추종↑·leash 미발동·미스의 j3 성분 감소; 궤적 꼬리
+  (q̇_ref→0)에선 FF도 소멸하므로 마지막 잔차는 여전히 refine 몫. j4는 중력과 얽혀 j3 결과 후 판단.
   **첫 실기 판독 성과 — settle leash 발견**: banana #23에서 one-shot plan 끝의 "+6.4 mm 상승"을
   DataLog로 추적 → pass-1 계획은 t=2.97에 목표 0.00 mm 도달, 궤적 시간 종료 순간 `MAX_REF_LEAD
   0.15 rad`(FullDynControllerRT.cpp:1417, 궤적 종료 후 reference가 실측보다 0.15 rad 이상 앞서지
