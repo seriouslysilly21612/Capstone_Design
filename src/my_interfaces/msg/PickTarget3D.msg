@@ -1,5 +1,10 @@
 std_msgs/Header header
 
+# Original COLOR capture time, carried end-to-end for latency metrics. Kept
+# SEPARATE from header.stamp (which stays the depth-frame stamp; header.frame_id
+# = camera_depth_optical_frame is what the base node uses for the TF lookup).
+builtin_interfaces/Time capture_stamp
+
 bool target_valid
 bool depth_valid
 

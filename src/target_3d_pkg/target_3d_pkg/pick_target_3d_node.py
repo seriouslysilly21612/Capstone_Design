@@ -1,4 +1,7 @@
 import math
+import signal
+import time
+
 import numpy as np
 
 import rclpy
@@ -14,6 +17,13 @@ from sensor_msgs.msg import Image, CameraInfo
 from realsense2_camera_msgs.msg import Extrinsics
 
 from my_interfaces.msg import PickTarget, PickTarget3D
+from target_3d_pkg.metrics_recorder import (
+    MetricsRecorder,
+    age_ms,
+    stamp_to_ns,
+    write_summary_csv,
+    _round,
+)
 
 
 # ===== Pinhole helpers (no distortion: D435i color/depth are rectified, d=0) =====
@@ -170,6 +180,11 @@ class PickTarget3DNode(Node):
         # once live mismatch count stays 0.
         self.declare_parameter('epipolar_ab_check', False)
 
+        # Metrics (off by default): performance CSV per pick + yield tally.
+        self.declare_parameter('metrics_csv_path', '')
+        self.declare_parameter('metrics_duration_sec', 0.0)
+        self.declare_parameter('yield_csv_path', '')
+
         pick_target_topic = self.get_parameter('pick_target_topic').value
         depth_topic = self.get_parameter('depth_topic').value
         depth_info_topic = self.get_parameter('depth_info_topic').value
@@ -190,6 +205,17 @@ class PickTarget3DNode(Node):
         self.ab_checked = 0
         self.ab_mismatch = 0
         self.last_warn_log_time_ns = {}
+
+        self.metrics = MetricsRecorder(
+            self.get_logger(),
+            str(self.get_parameter('metrics_csv_path').value),
+            float(self.get_parameter('metrics_duration_sec').value),
+        )
+        self.yield_csv_path = str(self.get_parameter('yield_csv_path').value)
+        self.frames_total = 0
+        self.target_in_valid = 0
+        self.depth_valid_out = 0
+        self.fail_tally = {}
 
         # ===== Runtime state =====
         # Depth arrives at stream rate but is consumed only at pick time —
@@ -327,6 +353,14 @@ class PickTarget3DNode(Node):
         )
 
     def pick_target_callback(self, msg: PickTarget):
+        compute_start_ns = time.perf_counter_ns()
+        capture_stamp = msg.capture_stamp
+        in_age = (age_ms(self.get_clock().now().nanoseconds, capture_stamp)
+                  if self.metrics.enabled else None)
+        self.frames_total += 1
+        if msg.target_valid:
+            self.target_in_valid += 1
+
         out = PickTarget3D()
 
         # copy 2D info
@@ -345,25 +379,25 @@ class PickTarget3DNode(Node):
         out.z = 0.0
 
         if not msg.target_valid:
-            self.target_3d_pub.publish(out)
+            self._emit(out, capture_stamp, compute_start_ns, in_age)
             return
 
         depth_msg = self.latest_depth_msg
         if depth_msg is None:
             self.log_warn_throttled('no_depth_image', 'No depth image yet')
-            self.target_3d_pub.publish(out)
+            self._emit(out, capture_stamp, compute_start_ns, in_age)
             return
 
         if not self.intrinsics_ready():
             self.log_warn_throttled('no_intrinsics', 'No camera intrinsics yet')
-            self.target_3d_pub.publish(out)
+            self._emit(out, capture_stamp, compute_start_ns, in_age)
             return
 
         if self.R_dc is None:
             self.log_warn_throttled(
                 'no_extrinsics', 'No depth->color extrinsics yet'
             )
-            self.target_3d_pub.publish(out)
+            self._emit(out, capture_stamp, compute_start_ns, in_age)
             return
 
         depth_img, eff_scale = self.depth_msg_to_view(depth_msg)
@@ -372,7 +406,7 @@ class PickTarget3DNode(Node):
                 'bad_depth_encoding',
                 f'Unsupported depth encoding: {depth_msg.encoding}',
             )
-            self.target_3d_pub.publish(out)
+            self._emit(out, capture_stamp, compute_start_ns, in_age)
             return
 
         if not self._depth_view_checked:
@@ -420,7 +454,7 @@ class PickTarget3DNode(Node):
             self.log_warn_throttled(
                 'no_valid_depth', 'No valid depth for bbox center (reverse proj)'
             )
-            self.target_3d_pub.publish(out)
+            self._emit(out, capture_stamp, compute_start_ns, in_age)
             return
 
         ui, vi = found
@@ -429,7 +463,7 @@ class PickTarget3DNode(Node):
             self.log_warn_throttled(
                 'no_valid_depth_patch', 'No valid depth in patch around match'
             )
-            self.target_3d_pub.publish(out)
+            self._emit(out, capture_stamp, compute_start_ns, in_age)
             return
 
         # 3D point in the DEPTH optical frame.
@@ -444,7 +478,7 @@ class PickTarget3DNode(Node):
         out.y = float(point[1])
         out.z = float(point[2])
 
-        self.target_3d_pub.publish(out)
+        self._emit(out, capture_stamp, compute_start_ns, in_age)
 
     def get_depth_m_from_patch(self, depth_img, u, v, encoding):
         r = self.patch_radius
@@ -473,7 +507,52 @@ class PickTarget3DNode(Node):
             return None
         return z_m
 
+    def _emit(self, out, capture_stamp, compute_start_ns, in_age):
+        """Set capture_stamp, record one performance row, publish. Every publish
+        path routes through here so the CSV has one row per pick_target."""
+        out.capture_stamp = capture_stamp
+        if out.depth_valid:
+            self.depth_valid_out += 1
+        if self.metrics.enabled:
+            now_ns = self.get_clock().now().nanoseconds
+            compute_ms = (time.perf_counter_ns() - compute_start_ns) / 1e6
+            skew = None
+            dmsg = self.latest_depth_msg
+            if dmsg is not None:
+                dsn = stamp_to_ns(dmsg.header.stamp)
+                csn = stamp_to_ns(capture_stamp)
+                if dsn > 0 and csn > 0:
+                    skew = (dsn - csn) / 1e6  # signed: depth frame vs color capture
+            self.metrics.add({
+                'capture_sec': capture_stamp.sec,
+                'capture_nanosec': capture_stamp.nanosec,
+                'target3d_in_age_ms': _round(in_age),
+                'target3d_compute_ms': _round(compute_ms),
+                'target3d_out_age_ms': _round(age_ms(now_ns, capture_stamp)),
+                'depth_vs_color_skew_ms': _round(skew),
+                'depth_valid': int(out.depth_valid),
+            })
+        self.target_3d_pub.publish(out)
+
+    def write_yield_summary(self):
+        if not self.yield_csv_path:
+            return
+        denom = max(self.target_in_valid, 1)
+        row = {
+            'node': 'pick_target_3d',
+            'frames_total': self.frames_total,
+            'target_in_valid': self.target_in_valid,
+            'depth_valid_out': self.depth_valid_out,
+            'depth_valid_rate': round(self.depth_valid_out / denom, 4),
+        }
+        for reason, count in sorted(self.fail_tally.items()):
+            row[f'fail_{reason}'] = count
+        write_summary_csv(self.get_logger(), self.yield_csv_path, [row])
+
     def log_warn_throttled(self, key, message):
+        # Count every failure occurrence (not just the throttled-through logs)
+        # so the yield summary sees the true cause distribution.
+        self.fail_tally[key] = self.fail_tally.get(key, 0) + 1
         now_ns = self.get_clock().now().nanoseconds
         last_log_time_ns = self.last_warn_log_time_ns.get(key)
         if last_log_time_ns is not None:
@@ -487,13 +566,24 @@ class PickTarget3DNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = PickTarget3DNode()
+
+    def _on_sigterm(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
+        node.metrics.save()
+        node.write_yield_summary()
         node.destroy_node()
-        rclpy.shutdown()
+        # SIGINT 시 rclpy의 전역 signal handler가 이미 context를 shutdown 시켰으므로
+        # 여기서 또 부르면 "rcl_shutdown already called" 예외가 난다. ok()로 가드.
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

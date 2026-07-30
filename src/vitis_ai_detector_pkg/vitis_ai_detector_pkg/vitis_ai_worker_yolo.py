@@ -33,9 +33,10 @@ import vart
 
 DEFAULT_THRESHOLD = 0.50
 CLASS_THRESHOLDS_BY_NAME = {
-    "person": 0.30,  # safety class: recall 우선 (계획 D8)
+    "person": 2.0,  # safety class: recall 우선 (계획 D8)
     # apple threshold hack 제거(2026-07-10): D14 실물 apple 재학습으로 실물 apple 0.5→0.88 →
     #   default 0.50으로 충분. (초기 apple:0.40은 'apple 0.462'가 실은 peach였다는 D13 오판 기반)
+    # 아직은 필요 없어서 검출 안되게(threshold=2.0) 설정
 }
 NMS_THRESHOLD = 0.45
 KEEP_TOP_K = 100

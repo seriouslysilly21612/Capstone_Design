@@ -126,6 +126,11 @@ class VitisAiDetectorNode(Node):
         # processed frame, so camera/worker startup is excluded), then write the
         # CSV automatically. 0 = collect until shutdown.
         self.declare_parameter("metrics_duration_sec", 0.0)
+        # Yield/reliability summary (frame-budget funnel + worker restart/timeout/
+        # slow counts) written once at shutdown. slow_worker_ms flags a near-hang
+        # round-trip (a leading indicator before a hard timeout/restart).
+        self.declare_parameter("yield_csv_path", "")
+        self.declare_parameter("slow_worker_ms", 150.0)
 
         self.model_path = self.get_parameter("model_path").value
         self.worker_script_path = self.get_parameter("worker_script_path").value
@@ -162,6 +167,8 @@ class VitisAiDetectorNode(Node):
         self.metrics_duration_sec = float(
             self.get_parameter("metrics_duration_sec").value
         )
+        self.yield_csv_path = str(self.get_parameter("yield_csv_path").value)
+        self.slow_worker_ms = float(self.get_parameter("slow_worker_ms").value)
         self.metrics_start_ns = None
         self.metrics_window_closed = False
 
@@ -171,6 +178,17 @@ class VitisAiDetectorNode(Node):
         self.worker_input_height = None
         self.worker_input_width = None
         self.last_worker_timing = None
+
+        # Frame-budget funnel + worker reliability counters (yield summary).
+        self.frames_arrived = 0
+        self.frames_overwritten = 0
+        self.frames_gate_skipped = 0
+        self.frames_processed = 0
+        self.frames_empty_out = 0
+        self.worker_restart_count = 0
+        self.worker_timeout_count = 0
+        self.worker_slow_count = 0
+        self._last_detect_pub_ns = None
 
         # Pipelining: the subscription callback only stores the newest frame; a
         # dedicated worker thread consumes it back-to-back (worker_loop /
@@ -250,6 +268,10 @@ class VitisAiDetectorNode(Node):
         # Lightweight: keep only the newest frame and hand off to the worker
         # thread. Returns immediately so the executor never blocks on the DPU.
         with self.frame_lock:
+            self.frames_arrived += 1
+            if self.latest_msg is not None:
+                # previous frame never consumed -> dropped (latest-frame-only)
+                self.frames_overwritten += 1
             self.latest_msg = msg
             self.frame_event.set()
 
@@ -267,7 +289,9 @@ class VitisAiDetectorNode(Node):
             if msg is None:
                 continue
             if not self.should_process_frame():
+                self.frames_gate_skipped += 1
                 continue
+            self.frames_processed += 1
             self.process_frame(msg)
 
     def process_frame(self, msg):
@@ -287,6 +311,9 @@ class VitisAiDetectorNode(Node):
             out_msg = DetectionArray()
             out_msg.header = msg.header
             out_msg.detections = detections
+
+            if len(detections) == 0:
+                self.frames_empty_out += 1
 
             if detections or self.publish_empty_detections:
                 self.publisher.publish(out_msg)
@@ -336,6 +363,14 @@ class VitisAiDetectorNode(Node):
             ipc_overhead_ms = (
                 worker_call_ms - worker_ms if worker_ms is not None else None
             )
+            if worker_call_ms > self.slow_worker_ms:
+                self.worker_slow_count += 1
+            detect_period_ms = None
+            if self._last_detect_pub_ns is not None:
+                detect_period_ms = (
+                    detection_publish_done_ns - self._last_detect_pub_ns
+                ) / 1e6
+            self._last_detect_pub_ns = detection_publish_done_ns
 
             if self.metrics_rows is not None and not self.metrics_window_closed:
                 if self.metrics_start_ns is None:
@@ -348,6 +383,9 @@ class VitisAiDetectorNode(Node):
                 self.metrics_rows.append({
                     "stamp_sec": msg.header.stamp.sec,
                     "stamp_nanosec": msg.header.stamp.nanosec,
+                    "capture_sec": msg.header.stamp.sec,
+                    "capture_nanosec": msg.header.stamp.nanosec,
+                    "detect_period_ms": self._round(detect_period_ms),
                     "count": len(detections),
                     "image_w": msg.width,
                     "image_h": msg.height,
@@ -428,9 +466,14 @@ class VitisAiDetectorNode(Node):
                     )
 
         except subprocess.TimeoutExpired:
-            self.get_logger().error("Vitis-AI detector timeout")
+            self.worker_timeout_count += 1
+            # 종료 중의 broken pipe/timeout은 정상 현상 → 에러 로그로 시끄럽게 하지 않는다.
+            # (get_logger()도 context가 내려간 뒤엔 "context invalid" 경고를 유발한다.)
+            if not self.shutdown_event.is_set():
+                self.get_logger().error("Vitis-AI detector timeout")
         except Exception as exc:
-            self.get_logger().error(f"Detection failed: {exc}")
+            if not self.shutdown_event.is_set():
+                self.get_logger().error(f"Detection failed: {exc}")
 
     def start_worker(self):
         if self.worker_process is not None and self.worker_process.poll() is None:
@@ -499,6 +542,7 @@ class VitisAiDetectorNode(Node):
                     os.kill(process.pid, signal.SIGKILL)
 
     def restart_worker(self):
+        self.worker_restart_count += 1
         self.stop_worker()
         self.start_worker()
 
@@ -533,6 +577,10 @@ class VitisAiDetectorNode(Node):
             raise RuntimeError(f"Expected BGR image with 3 channels, got {image.shape}")
 
         if self.worker_process is None or self.worker_process.poll() is not None:
+            # 종료 중이면 worker를 되살리지 않는다: 새 worker 로드(~4.5s)가
+            # launch의 5초 SIGINT 유예를 넘겨 SIGTERM 강제종료(exit -15)를 유발한다.
+            if self.shutdown_event.is_set():
+                raise RuntimeError("worker unavailable during shutdown")
             self.restart_worker()
 
         source_height, source_width, _ = image.shape
@@ -567,7 +615,10 @@ class VitisAiDetectorNode(Node):
             self.worker_process.stdin.flush()
             response = self.read_worker_json("worker inference")
         except (BrokenPipeError, RuntimeError, subprocess.TimeoutExpired):
-            self.restart_worker()
+            # 종료 중이면 깨진 pipe는 worker가 공유 SIGINT로 죽은 정상 현상이다.
+            # crash로 오해해 재시작하지 않고 조용히 올려보낸다.
+            if not self.shutdown_event.is_set():
+                self.restart_worker()
             raise
 
         if response.get("error"):
@@ -731,15 +782,46 @@ class VitisAiDetectorNode(Node):
             self.worker_thread.join(timeout=3.0)
             self.worker_thread = None
 
+    def write_yield_summary(self):
+        # Frame-budget funnel + worker reliability tally, one row, written once at
+        # shutdown. Off unless yield_csv_path is set. Counters are always
+        # incremented (cheap ints), only the write is gated.
+        if not self.yield_csv_path or self.frames_arrived == 0:
+            return
+        arrived = max(self.frames_arrived, 1)
+        processed = max(self.frames_processed, 1)
+        row = {
+            "node": "vitis_ai_detector",
+            "frames_arrived": self.frames_arrived,
+            "frames_overwritten_dropped": self.frames_overwritten,
+            "frames_gate_skipped": self.frames_gate_skipped,
+            "frames_processed": self.frames_processed,
+            "process_rate_of_arrived": round(self.frames_processed / arrived, 4),
+            "frames_empty_out": self.frames_empty_out,
+            "empty_rate_of_processed": round(self.frames_empty_out / processed, 4),
+            "worker_restart_count": self.worker_restart_count,
+            "worker_timeout_count": self.worker_timeout_count,
+            "worker_slow_count": self.worker_slow_count,
+        }
+        directory = os.path.dirname(self.yield_csv_path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        with open(self.yield_csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+            writer.writeheader()
+            writer.writerow(row)
+        self.get_logger().info(
+            f"Saved detector yield summary to {self.yield_csv_path}"
+        )
+
     def save_metrics_csv(self):
         if not self.metrics_csv_path or not self.metrics_rows:
             return
-        fieldnames = [
-            "stamp_sec", "stamp_nanosec", "count", "image_w", "image_h",
-            "processing_ms", "detect_ms", "img_ms", "worker_call_ms",
-            "ipc_overhead_ms", "pre_ms", "dpu_ms", "post_ms", "worker_ms",
-            "detection_publish_ms", "overlay_ms", "age_in_ms", "frame_age_ms",
-        ]
+        # Derive columns from the actual row (which now also carries
+        # capture_sec/capture_nanosec/detect_period_ms) so the header can never
+        # drift from the dict again -- a hardcoded list previously omitted the
+        # new join keys and made DictWriter raise, leaving a header-only file.
+        fieldnames = list(self.metrics_rows[0].keys())
         try:
             directory = os.path.dirname(self.metrics_csv_path)
             if directory:
@@ -778,6 +860,7 @@ def main(args=None):
         if node is not None:
             node.stop_pipeline()
             node.save_metrics_csv()
+            node.write_yield_summary()
             node.stop_worker()
             node.destroy_node()
         if rclpy.ok():

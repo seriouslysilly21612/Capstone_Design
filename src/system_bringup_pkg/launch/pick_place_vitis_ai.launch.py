@@ -30,10 +30,15 @@ That injects the performance/yield CSV paths into all 4 nodes AND starts the
 standalone resource_sampler (the sampler must be a separate process — it reads
 /proc for all 7 pipeline processes incl. the VART worker subprocess, which no
 ROS node can enumerate). Without the flag nothing is recorded and behaviour is
-unchanged. Args: metrics_dir (default docs/metrics), metrics_duration (s, auto-
-save then Ctrl-C; 0 = until shutdown), sampler_script. See docs/metrics/README.md
+unchanged. Each run writes to its OWN dir evidence/metrics/runs/<timestamp>/ (so
+history is never overwritten) and evidence/metrics/latest is repointed at it.
+Args: metrics_dir (base), metrics_run (run label, '' = timestamp), metrics_duration
+(s, auto-save then Ctrl-C; 0 = until shutdown), sampler_script.
+See evidence/metrics/README.md
 """
 import os
+import re
+from datetime import datetime
 
 from launch import LaunchDescription
 from launch.actions import (
@@ -49,6 +54,33 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+
+
+def _point_latest_at(run_dir, metrics_dir):
+    """Repoint <metrics_dir>/latest -> runs/<label> so tools can say
+    `--base <metrics_dir>/latest` and always get the newest run.
+
+    The link target is RELATIVE so the whole metrics tree survives being copied
+    or scp'd elsewhere. Replacement is atomic (symlink to temp name + rename) so
+    a crash mid-update can never leave `latest` dangling. Best-effort: a metrics
+    run must never fail because of a convenience link, so all errors are
+    swallowed after printing (launch has no logger available here).
+    """
+    latest = os.path.join(metrics_dir, 'latest')
+    try:
+        os.makedirs(run_dir, exist_ok=True)
+        if os.path.isdir(latest) and not os.path.islink(latest):
+            print(f'[metrics] NOTE: {latest} is a real directory, not a link -- '
+                  f'leaving it alone. Newest run: {run_dir}')
+            return
+        tmp = latest + '.tmp'
+        if os.path.lexists(tmp):
+            os.remove(tmp)
+        os.symlink(os.path.relpath(run_dir, metrics_dir), tmp)
+        os.replace(tmp, latest)          # atomic swap over any existing link
+        print(f'[metrics] this run -> {run_dir}  (also reachable as {latest})')
+    except OSError as exc:
+        print(f'[metrics] WARNING: could not update {latest}: {exc}')
 
 
 def launch_setup(context, *args, **kwargs):
@@ -117,6 +149,22 @@ def launch_setup(context, *args, **kwargs):
     metrics_dir = LaunchConfiguration('metrics_dir').perform(context)
     metrics_duration = LaunchConfiguration('metrics_duration').perform(context)
 
+    # Every run gets its OWN directory under <metrics_dir>/runs/<label>, so a new
+    # run never overwrites the previous one. The file NAMES stay fixed
+    # (performance/detector.csv, ...) on purpose: join_perf.py and
+    # plot_metrics*.py take a --base dir and expect exactly that layout, so
+    # per-run dirs preserve history AND keep every tool working unchanged
+    # (a timestamped FILENAME would have broken all of them).
+    run_dir = metrics_dir
+    if metrics_on:
+        label = LaunchConfiguration('metrics_run').perform(context).strip()
+        if not label:
+            label = datetime.now().strftime('%Y%m%d_%H%M%S')
+        # sanitize: a label reaches the filesystem, so no path traversal/spaces
+        label = re.sub(r'[^A-Za-z0-9._-]', '_', label) or 'run'
+        run_dir = os.path.join(metrics_dir, 'runs', label)
+        _point_latest_at(run_dir, metrics_dir)
+
     def metrics_params(node_key):
         """Override params that turn a node's recording on, or [] when off.
         Appended AFTER the node's YAML so it overrides the '' defaults."""
@@ -124,8 +172,8 @@ def launch_setup(context, *args, **kwargs):
             return []
         return [{
             'metrics_csv_path': os.path.join(
-                metrics_dir, 'performance', f'{node_key}.csv'),
-            'yield_csv_path': os.path.join(metrics_dir, 'yield', f'{node_key}.csv'),
+                run_dir, 'performance', f'{node_key}.csv'),
+            'yield_csv_path': os.path.join(run_dir, 'yield', f'{node_key}.csv'),
             'metrics_duration_sec': float(metrics_duration),
         }]
 
@@ -233,7 +281,7 @@ def launch_setup(context, *args, **kwargs):
         actions.append(ExecuteProcess(
             cmd=[
                 'python3', sampler_script,
-                '--output', os.path.join(metrics_dir, 'resource', 'run.csv'),
+                '--output', os.path.join(run_dir, 'resource', 'run.csv'),
                 '--duration', metrics_duration,
                 '--interval', '1.0',
             ],
@@ -250,9 +298,13 @@ def generate_launch_description():
             description='true = record performance+yield CSVs (all 4 nodes) and '
                         'start the resource sampler. Default false = no recording.'),
         DeclareLaunchArgument(
-            'metrics_dir', default_value='/home/ubuntu/ros2_ws/docs/metrics',
-            description='absolute base dir; performance/ resource/ yield/ subdirs '
-                        'are created under it'),
+            'metrics_dir', default_value='/home/ubuntu/ros2_ws/evidence/metrics',
+            description='absolute base dir; each run lands in runs/<label>/ under '
+                        'it with performance/ resource/ yield/ subdirs'),
+        DeclareLaunchArgument(
+            'metrics_run', default_value='',
+            description="label for this run's subdir under runs/ ('' = timestamp "
+                        'YYYYmmdd_HHMMSS). Reusing a label overwrites that run.'),
         DeclareLaunchArgument(
             'metrics_duration', default_value='300.0',
             description='seconds collected from the first frame, then auto-save; '

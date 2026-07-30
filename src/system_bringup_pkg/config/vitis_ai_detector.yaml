@@ -43,14 +43,9 @@ vitis_ai_detector_node:
     publish_compressed_overlay: false
     overlay_jpeg_quality: 70
     log_period_sec: 1.0
-    # Profiling only (OFF for production). To profile, set a path like
-    # "/home/ubuntu/ros2_ws/evidence/metrics/vitis_ai_metrics.csv": per-frame
-    # timing is buffered and written on shutdown. Must be absolute — ROS
-    # parameter YAML expands neither ~ nor environment variables.
-    # "" = disabled (no buffering / no I/O).
-
-    metrics_csv_path: ""
-    # When metrics_csv_path is set, auto-collect this many seconds from the first
-    # frame then write the CSV. 0 = until shutdown. (Ignored when path is "".)
-    
-    metrics_duration_sec: 185.0
+    # Metrics are OFF here and controlled by the launch flag `metrics:=true`,
+    # which injects metrics_csv_path / yield_csv_path / metrics_duration_sec for
+    # ALL nodes at once — a single source of truth (launch default is
+    # metrics_duration:=185, changed in pick_place_vitis_ai.launch.py). See
+    # evidence/metrics/README.md. To profile the detector alone via bare `ros2 run`
+    # (no launch), add metrics_csv_path (absolute) + metrics_duration_sec here.

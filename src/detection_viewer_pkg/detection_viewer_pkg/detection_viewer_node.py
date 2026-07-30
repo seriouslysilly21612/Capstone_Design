@@ -20,8 +20,12 @@ docs/vision/desktop_viewer_plan.md):
 """
 
 import argparse
+import csv
+import os
 import sys
+import time
 from collections import OrderedDict
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -53,7 +57,8 @@ def stamp_key(header):
 
 
 class DetectionViewer(Node):
-    def __init__(self, image_topic, detections_topic, buffer_len, window):
+    def __init__(self, image_topic, detections_topic, buffer_len, window,
+                 fps_csv="", fps_dir="~/pp_ws/viewer_ws/fps_log"):
         super().__init__("detection_viewer_node")
         self.window = window
         self.buffer_len = buffer_len
@@ -73,6 +78,20 @@ class DetectionViewer(Node):
         # otherwise draw frame N after N+1 is already up, which reads as a
         # stutter. Skipping is honest — we count it rather than show it.
         self.last_rendered = None
+
+        # Displayed FPS = the rate render() actually pushes frames to the window
+        # (one imshow per completed pair), measured on the wall clock, not the
+        # ROS clock. EMA-smoothed so the HUD number does not jitter frame to
+        # frame; alpha 0.2 -> ~5-frame time constant (~0.3 s at 15 Hz).
+        self.last_render_t = None
+        self.first_render_t = None
+        self.fps_ema = None
+        # Per-frame FPS log, always on. Rows are buffered in RAM (a plain
+        # list.append on the render path — no disk I/O) and flushed to CSV once
+        # at shutdown, so the logging never touches the hot path. The file is
+        # auto-named per run under fps_dir; --fps-csv overrides with an exact path.
+        self.fps_csv_path = self._resolve_fps_path(fps_csv, fps_dir)
+        self.fps_samples = []  # rows of (elapsed_s, inst_fps, ema_fps, n_det)
 
         # BEST_EFFORT on the image: the publisher is RELIABLE, which is
         # compatible, and asking for RELIABLE over the network would invite
@@ -169,6 +188,31 @@ class DetectionViewer(Node):
         hud = f"{len(msg.detections)} det  {frame.shape[1]}x{frame.shape[0]}"
         cv2.putText(frame, hud, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                     (255, 255, 255), 1, cv2.LINE_AA)
+
+        # Update the displayed-FPS estimate once per shown frame, then draw it
+        # top-right. First frame has no interval yet, so it stays blank.
+        now = time.monotonic()
+        if self.last_render_t is not None:
+            dt = now - self.last_render_t
+            if dt > 0.0:
+                inst = 1.0 / dt
+                self.fps_ema = inst if self.fps_ema is None else 0.2 * inst + 0.8 * self.fps_ema
+                if self.fps_csv_path:
+                    self.fps_samples.append(
+                        (now - self.first_render_t, inst, self.fps_ema, len(msg.detections)))
+        else:
+            self.first_render_t = now
+        self.last_render_t = now
+        if self.fps_ema is not None:
+            fps_text = f"{self.fps_ema:.1f} FPS"
+            (fw, _), _ = cv2.getTextSize(fps_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+            org = (frame.shape[1] - fw - 8, 24)
+            # Black outline under a bright label so it reads on any background.
+            cv2.putText(frame, fps_text, org, cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                        (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(frame, fps_text, org, cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                        (0, 255, 0), 1, cv2.LINE_AA)
+
         cv2.imshow(self.window, frame)
         if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
             rclpy.shutdown()
@@ -196,6 +240,54 @@ class DetectionViewer(Node):
         self.n_img = self.n_det = self.n_hit = self.n_late = 0
         self.n_drop = self.n_stale = 0
 
+    def _resolve_fps_path(self, fps_csv, fps_dir):
+        """Pick the CSV path — auto-named per run under fps_dir, unless --fps-csv
+        gives an exact file — and ensure its directory exists. Returns "" (which
+        disables logging) if the directory cannot be created, so a bad path never
+        crashes the viewer."""
+        if fps_csv:
+            path = os.path.expanduser(fps_csv)
+            directory = os.path.dirname(path) or "."
+        else:
+            directory = os.path.expanduser(fps_dir)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = os.path.join(directory, f"fps_{stamp}.csv")
+        try:
+            os.makedirs(directory, exist_ok=True)
+        except OSError as e:
+            self.get_logger().error(
+                f"cannot create FPS log dir {directory}: {e} — FPS logging disabled")
+            return ""
+        self.get_logger().info(f"FPS log -> {path}")
+        return path
+
+    def dump_fps_csv(self):
+        """Flush the buffered FPS samples to CSV. Called once on shutdown, so
+        the whole run's data hits the disk in a single write — nothing during
+        rendering. A SIGKILL (kill -9) skips this; q/ESC and Ctrl-C do not.
+
+        Uses print(), not self.get_logger(): by the time this runs on Ctrl-C the
+        rclpy context is already invalid (the SIGINT handler tore it down first),
+        so a ROS log here still prints to the console but then fails to publish to
+        /rosout with a 'publisher's context is invalid' warning. print() avoids
+        the /rosout hop entirely, so the summary shows cleanly with no warning."""
+        if not self.fps_csv_path or not self.fps_samples:
+            return
+        try:
+            with open(self.fps_csv_path, "w", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(["elapsed_s", "inst_fps", "ema_fps", "n_det"])
+                for elapsed, inst, ema, ndet in self.fps_samples:
+                    w.writerow([f"{elapsed:.4f}", f"{inst:.3f}", f"{ema:.3f}", ndet])
+        except OSError as e:
+            print(f"[detection_viewer] could not write FPS CSV {self.fps_csv_path}: {e}",
+                  file=sys.stderr)
+            return
+        dur = self.fps_samples[-1][0]
+        avg = len(self.fps_samples) / dur if dur > 0 else 0.0
+        print(f"[detection_viewer] wrote {len(self.fps_samples)} FPS rows to "
+              f"{self.fps_csv_path} ({dur:.1f}s, avg {avg:.1f} FPS)")
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -203,15 +295,21 @@ def main():
     ap.add_argument("--detections-topic", default="/detections")
     ap.add_argument("--buffer", type=int, default=30)
     ap.add_argument("--window", default="KV260 detections")
+    ap.add_argument("--fps-dir", default="~/pp_ws/viewer_ws/fps_log",
+                    help="directory for the auto-named per-run FPS CSV (logging is always on)")
+    ap.add_argument("--fps-csv", default="",
+                    help="exact CSV path; overrides --fps-dir auto-naming")
     args, ros_args = ap.parse_known_args()
 
     rclpy.init(args=ros_args)
-    node = DetectionViewer(args.image_topic, args.detections_topic, args.buffer, args.window)
+    node = DetectionViewer(args.image_topic, args.detections_topic, args.buffer,
+                           args.window, fps_csv=args.fps_csv, fps_dir=args.fps_dir)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
+        node.dump_fps_csv()
         cv2.destroyAllWindows()
         node.destroy_node()
         if rclpy.ok():

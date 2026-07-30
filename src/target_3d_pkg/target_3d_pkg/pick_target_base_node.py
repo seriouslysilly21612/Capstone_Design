@@ -1,3 +1,6 @@
+import signal
+import time
+
 import numpy as np
 
 import rclpy
@@ -9,6 +12,12 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from tf2_geometry_msgs import do_transform_point
 
 from my_interfaces.msg import PickTarget3D
+from target_3d_pkg.metrics_recorder import (
+    MetricsRecorder,
+    age_ms,
+    write_summary_csv,
+    _round,
+)
 
 
 def quat_to_rotation_matrix(qx, qy, qz, qw):
@@ -41,6 +50,11 @@ class PickTargetBaseNode(Node):
         # if the TF ever becomes dynamic.
         self.declare_parameter('static_tf_cache', True)
 
+        # Metrics (off by default): performance CSV (incl. true_e2e) + yield.
+        self.declare_parameter('metrics_csv_path', '')
+        self.declare_parameter('metrics_duration_sec', 0.0)
+        self.declare_parameter('yield_csv_path', '')
+
         input_topic = self.get_parameter('input_topic').value
         output_topic = self.get_parameter('output_topic').value
 
@@ -71,6 +85,17 @@ class PickTargetBaseNode(Node):
         self._tf_cache = {}   # source frame_id -> (R 3x3, t 3)
         self.last_warn_log_time_ns = {}
 
+        self.metrics = MetricsRecorder(
+            self.get_logger(),
+            str(self.get_parameter('metrics_csv_path').value),
+            float(self.get_parameter('metrics_duration_sec').value),
+        )
+        self.yield_csv_path = str(self.get_parameter('yield_csv_path').value)
+        self.frames_total = 0
+        self.published_valid = 0
+        self.fail_tally = {}
+        self._last_pub_ns = None
+
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
@@ -98,6 +123,12 @@ class PickTargetBaseNode(Node):
         )
 
     def target_callback(self, msg: PickTarget3D):
+        compute_start_ns = time.perf_counter_ns()
+        capture_stamp = msg.capture_stamp
+        in_age = (age_ms(self.get_clock().now().nanoseconds, capture_stamp)
+                  if self.metrics.enabled else None)
+        self.frames_total += 1
+
         out = self.make_output_from_input(msg)
         out.header.stamp = self.get_clock().now().to_msg()
         out.header.frame_id = self.target_frame
@@ -114,7 +145,8 @@ class PickTargetBaseNode(Node):
                 f'target_valid={msg.target_valid}, '
                 f'depth_valid={msg.depth_valid}, z={msg.z:.3f}'
             )
-            self.publish_invalid_if_enabled(out)
+            self._emit(out, capture_stamp, compute_start_ns, in_age,
+                       publish=self.publish_invalid_targets)
             return
 
         # Fast path: cached static (R, t) — no tf2 lookup, one matmul.
@@ -131,7 +163,7 @@ class PickTargetBaseNode(Node):
             out.x = float(p[0])
             out.y = float(p[1])
             out.z = float(p[2])
-            self.pub.publish(out)
+            self._emit(out, capture_stamp, compute_start_ns, in_age)
             return
 
         point_in = PointStamped()
@@ -158,7 +190,7 @@ class PickTargetBaseNode(Node):
             out.y = float(point_out.point.y)
             out.z = float(point_out.point.z)
 
-            self.pub.publish(out)
+            self._emit(out, capture_stamp, compute_start_ns, in_age)
 
             if self.static_tf_cache:
                 q = transform.transform.rotation
@@ -189,10 +221,12 @@ class PickTargetBaseNode(Node):
                 f'to {self.target_frame}: {e}'
             )
 
-            self.publish_invalid_if_enabled(out)
+            self._emit(out, capture_stamp, compute_start_ns, in_age,
+                       publish=self.publish_invalid_targets)
 
     def make_output_from_input(self, msg: PickTarget3D):
         out = PickTarget3D()
+        out.capture_stamp = msg.capture_stamp
 
         out.target_valid = msg.target_valid
         out.depth_valid = msg.depth_valid
@@ -230,11 +264,52 @@ class PickTargetBaseNode(Node):
 
         return True, 'accepted'
 
-    def publish_invalid_if_enabled(self, msg: PickTarget3D):
-        if self.publish_invalid_targets:
-            self.pub.publish(msg)
+    def _emit(self, out, capture_stamp, compute_start_ns, in_age, publish=True):
+        """Record one performance row (incl. true_e2e for valid targets) and
+        optionally publish. Every exit routes through here -> one CSV row per
+        input target. output_period_ms tracks the interval between actual
+        published outputs (the cadence the robot consumer sees)."""
+        if out.target_valid:
+            self.published_valid += 1
+        if self.metrics.enabled:
+            now_perf = time.perf_counter_ns()
+            now_ns = self.get_clock().now().nanoseconds
+            compute_ms = (now_perf - compute_start_ns) / 1e6
+            out_period = None
+            if publish:
+                if self._last_pub_ns is not None:
+                    out_period = (now_perf - self._last_pub_ns) / 1e6
+                self._last_pub_ns = now_perf
+            # true E2E is only meaningful for a valid target (capture -> here).
+            true_e2e = age_ms(now_ns, capture_stamp) if out.target_valid else None
+            self.metrics.add({
+                'capture_sec': capture_stamp.sec,
+                'capture_nanosec': capture_stamp.nanosec,
+                'base_in_age_ms': _round(in_age),
+                'base_compute_ms': _round(compute_ms),
+                'true_e2e_ms': _round(true_e2e),
+                'output_period_ms': _round(out_period),
+                'target_valid': int(out.target_valid),
+            })
+        if publish:
+            self.pub.publish(out)
+
+    def write_yield_summary(self):
+        if not self.yield_csv_path:
+            return
+        total = max(self.frames_total, 1)
+        row = {
+            'node': 'pick_target_base',
+            'frames_total': self.frames_total,
+            'published_valid': self.published_valid,
+            'final_target_valid_rate': round(self.published_valid / total, 4),
+        }
+        for reason, count in sorted(self.fail_tally.items()):
+            row[f'reject_{reason}'] = count
+        write_summary_csv(self.get_logger(), self.yield_csv_path, [row])
 
     def log_warn_throttled(self, key, message):
+        self.fail_tally[key] = self.fail_tally.get(key, 0) + 1
         now_ns = self.get_clock().now().nanoseconds
         last_log_time_ns = self.last_warn_log_time_ns.get(key)
 
@@ -251,13 +326,23 @@ def main(args=None):
     rclpy.init(args=args)
     node = PickTargetBaseNode()
 
+    def _on_sigterm(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
+        node.metrics.save()
+        node.write_yield_summary()
         node.destroy_node()
-        rclpy.shutdown()
+        # SIGINT 시 rclpy의 전역 signal handler가 이미 context를 shutdown 시켰으므로
+        # 여기서 또 부르면 "rcl_shutdown already called" 예외가 난다. ok()로 가드.
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
