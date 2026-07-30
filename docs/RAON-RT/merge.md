@@ -14,7 +14,7 @@
 
 ---
 
-## 0. 30초 요약 (2026-07-29 현재)
+## 0. 30초 요약 (2026-07-31 현재)
 
 - **목표**: perception 파이프라인은 그대로 살린 채, `/pick_target_base`(base_link 좌표)를
   RAON-RT 제어 앱이 구독 → 오퍼레이터가 터미널 메뉴로 물체 선택 → `z+margin`, top-down
@@ -31,7 +31,7 @@
   반영(공구축=−X 함정 E16), sticky-float(속도게이트 완화판 오퍼레이터 OK), 서보-오프
   goal 가드(E15), radial 게이트, refine oriWeight=0 회귀픽스(E18) → **ready-seed IK**
   (`19b15ba`: q_ready 고정 시드로 접근 해가 시작 자세와 무관하게 결정적 + 2π 폴딩 +
-  자동 스테이징 — **실기 검증 대기**).
+  자동 스테이징 — 당시 실기 검증 대기, 같은 날 20~22시 **v3로 검증 완료**(다음 항목)).
 - **20~22시 실기 — E21/E22/E23 연쇄 복구 완결**: v3 정상(괴랄 궤적 소멸) → 도달점이 물체를
   ~11 cm 벗어남 = **E21 로봇 베이스 물리 이동**(프로브 fit yaw +5.14°/t(+4.5,+10.4) cm →
   launch TF 재베이스) → 게이트 상수도 옛 프레임 유물(E22, 박스·r 재베이스) → 원거리 soft-R
@@ -99,9 +99,25 @@
   CPU1엔 eth0·타이머·IPI 말고 없다(USB NIC는 CPU0). Lost 델타 0으로 관측 비용도 없음 →
   **현 상태 유지**. ⚠️ **eth0 IRQ를 CPU3으로 옮기는 것은 금지** — 앱이 prio 95/97인데 IRQ
   스레드는 50이라 굶고, **IK 최대 58 ms 동안 프레임 처리가 멈춘다**. off-RT가 선행조건
-- **다음**: ① IK off-RT ② 충돌 검사(RViz+MuJoCo) ③ 파지 준비 — top-down 고정 R(기울기 정식 해결) + TCP 재정의(끝면 기준,
-  공구 스택 ~5 cm 실측 반영) + <5 mm 정밀도, 물체 6D pose는 나중 — §9. task-space servo는
-  사고 부검(E17) 전제조건 하 백로그.
+- **2026-07-30 — 접근 궤적 자동 기록·3계열 그래프**(RAON `592998e`, §6/§9.5 부록): 접근마다
+  DataLog 1파일 자동 생성(로거 창 24 s→완료 에지), 워처가 3D+변위 그래프 작도. FK는
+  `fk_replay`(컨트롤러 `.o` 링크, RT-FK 교차검증 0.002 mm). 이후 07-30~31 사용자 스펙으로
+  **2패널 고정**(3D=one-shot plan+actual, 변위 1plot=IK입력/FK(q_ref)/FK(q_act) 3계열,
+  `bd01c6d`→`b884069`). 이 도구의 첫 판독이 settle leash 발견 → 정밀화 트랙의 도화선.
+- **2026-07-30 저녁 ~ 07-31 새벽 — 접근 정밀화 트랙 완결(§9.5): first miss ~40 mm → 전 물체
+  원샷 7~11 mm 🎯**: 진범 = 중력·게인이 아니라 **손목 stiction + inertia-scaled PD 저권한**
+  (페이로드 A/B #24~26·Kd #30으로 소거, j3 breakaway 7.2~10.6 Nm 직증). 해법 = **Coulomb
+  마찰 FF**(M-바깥, KF_3=5.0/KF_4=3.0) + 함정 2건을 게이트로 봉인(E33 캐터펄트→refine scope
+  gate `9ba929d`, E35 소이동 과주→lag gate `90e5409`). 결과 **#52~58 7/7 refine 0회**
+  (HOME 5/5 + mustard→orange 전이 11.3 mm, 과주 0). 남은 오차는 stiction이 아니라 **일관
+  바이어스+j2 lag** — 파지 <5 mm의 지렛대는 KF_2+바이어스 보정으로 좁혀짐. 같은 기간
+  타이밍 사고 2건 규명: **E32/E34 = IgH master 스레드 priority inversion**(PI 없는
+  semaphore+SCHED_NORMAL) → EtherCAT-OP FIFO 40 **자동화**(`6c090ae`, 1회 설치
+  `sudo bash tools/install_ecat_op_fifo.sh`) + 실기 중 보드 무거운 작업 금지 수칙.
+- **다음**: ① IK off-RT ② 파지 준비 — TCP 재정의(끝면 기준, 공구 스택 ~5 cm 실측 반영) +
+  top-down 고정 R(기울기 정식 해결) + <5 mm 정밀도(지렛대: KF_2·바이어스 보정, §9.5 ⑦),
+  물체 6D pose는 나중 — §9 ③ 충돌 검사(RViz+MuJoCo — 오퍼레이터 지시로 우선순위 하향,
+  원샷 트랙 완결로 재논의 가능). task-space servo는 사고 부검(E17) 전제조건 하 백로그.
 - **사건 1건 해소(2026-07-26)**: 첫 Phase 3 시도에서 앱 `bad_alloc`(memlock 한도 유한 세션 +
   `mlockall(MCL_FUTURE)`+DDS arena) → teardown 중 커널 하드 락업 → 보드 재부팅. §7 E6~E8.
 - **로봇**: Indy7이 eth0에 직결, 제어전원 인가 시 7슬레이브 PREOP 상시 응답. **서보온 모션·
@@ -170,10 +186,11 @@ RAON-RT는 이미 base_link로 변환된 좌표를 소비만 한다 — RAON-RT�
 | D7 | person 안전 = **근접(대형 bbox)만 차단+래치** | 배경 통행인엔 무반응, 워크스페이스 접근 시 타깃 무효화 |
 | D8 | 슬레이브 DC = **저자 구성 그대로 OFF(SM-sync)로 브링업** | INDY7.cfg에 `DC_SUPPORT` 키 자체가 없음(기본 0) = 저자의 검증된 구동 상태. DC 실험은 cfg 주석 해제로(코드 준비됨) |
 | D9 | 사이클 = **1 ms 유지** | `m_dt=0.001` 하드코딩과 결합돼 있고, 동급 GEM 실측 "1 ms 안정" 근거. 2 ms 완충안은 폐기 |
-| D10 | 3+1 코어 격리 = 보류였다가 → **착수(2026-07-27 밤, 오퍼레이터 지시 — 그리퍼 대기 중 인프라 작업)** | RT-POSIX가 전 태스크를 CPU0에 기본 pin(`posix_rt.c:257`) → isolcpus만으론 무효, 앱 pin 코드와 한 세트. **실증 확인(2026-07-27)**: 접근 데모 전 구간 비격리(cmdline `skew_tick=1`만), Lost 0·지터 이상 무. **구현(`a6e2097`)**: cfg `[TASKn] CPU=` 키(파서+`InitRTTasks` pin, 미지정=-1=기존 CPU0) — TASK0/1(1 kHz 페어)만 CPU3, 키보드/터미널/로거는 CPU0 잔류. gate0에 cpu 인자. **비격리 베이스라인(파이프라인 부하, 20 s)**: CPU3 avg 1.0/max 33.9 µs, CPU0 avg 1.2/**max 104 µs**. cmdline 전환은 `/etc/default/flash-kernel` → `"skew_tick=1 isolcpus=3 nohz_full=3 rcu_nocbs=3 irqaffinity=0-2"`(+`flash-kernel`+재부팅; 커널 NO_HZ_FULL=y·RCU_NOCB=y 확인, 비전 ~1.8코어라 0-2 3코어 충분 — 7/9의 2+2 실패와 다름). GEM IRQ의 CPU3 이전 여부는 격리 후 실측으로. **재부팅+격리 A/B 대기** |
+| D10 | 3+1 코어 격리 = 보류였다가 → **착수(2026-07-27 밤, 오퍼레이터 지시 — 그리퍼 대기 중 인프라 작업)** | RT-POSIX가 전 태스크를 CPU0에 기본 pin(`posix_rt.c:257`) → isolcpus만으론 무효, 앱 pin 코드와 한 세트. **실증 확인(2026-07-27)**: 접근 데모 전 구간 비격리(cmdline `skew_tick=1`만), Lost 0·지터 이상 무. **구현(`a6e2097`)**: cfg `[TASKn] CPU=` 키(파서+`InitRTTasks` pin, 미지정=-1=기존 CPU0) — TASK0/1(1 kHz 페어)만 CPU3, 키보드/터미널/로거는 CPU0 잔류. gate0에 cpu 인자. **비격리 베이스라인(파이프라인 부하, 20 s)**: CPU3 avg 1.0/max 33.9 µs, CPU0 avg 1.2/**max 104 µs**. cmdline 전환은 `/etc/default/flash-kernel` → `"skew_tick=1 isolcpus=3 nohz_full=3 rcu_nocbs=3 irqaffinity=0-2"`(+`flash-kernel`+재부팅; 커널 NO_HZ_FULL=y·RCU_NOCB=y 확인, 비전 ~1.8코어라 0-2 3코어 충분 — 7/9의 2+2 실패와 다름). GEM IRQ의 CPU3 이전 여부는 격리 후 실측으로(→ §4.1: eth0 IRQ CPU1 전담=의도 설계). **격리 A/B 완결(07-28 17:02, §0)**: 격리 CPU3 max 51.1 µs vs 비격리 CPU0 114.6 µs |
 | D11 | 캘리브 이미지 = **파이프라인 토픽에서 캡처** | librealsense 직접 열기 금지(충돌). intrinsics도 camera_info에서 → `save_camera_params` 불필요 |
 | D12 | 캘리브 체인 = **ViSP 완전 배제, 태그 pose는 OpenCV로** (2026-07-26) | `visp-compute-apriltag-poses`는 x86-64 바이너리+소스 미포함+원저자 홈 rpath → 어디서도 실행 불가. `cv2.aruco`(APRILTAG_36h11)+`solvePnP`로 동일 YAML 산출. intrinsic은 공장값(camera_info) 1순위 — 파이프라인 3D와 같은 카메라 모델이어야 rMc 정합(불일치가 rMc에 흡수되는 계통오차 방지). 원저자 camera.xml은 640×480이라 어차피 재사용 불가(우린 848×480). 잔차 불량 시에만 `cv2.calibrateCamera` 재캘리브로 escalation |
 | D13 | 접근 IK 시딩 = **init 계산 q_ready 고정 시드 + 자동 분기** (2026-07-27, 오퍼레이터 선택) | 근본 원인: RBDL IK는 local 반복법이라 **시드가 유일한 브랜치 선택 장치**인데 시드=현재 자세였음 → 성공이 "오퍼레이터가 팔을 어디 놔뒀나"에 종속(시도마다 자세도 상이). 시드는 계산상 출발점일 뿐 물리 자세와 분리 가능 → init에서 워크스페이스 박스 중심을 풀어 q_ready 산출·코너 8점 검증, 매 접근을 q_ready(+그 자세의 soft-R)에서 해석 = **같은 목표, 같은 해**. 이동 정책(사용자 선택지 4개 중): **자동 분기** — Δq≤2.0 직행, 초과 시 q_ready 경유 자동 스테이징. 대안 검토: 해석적 IK(브랜치 전수 열거)가 근본 치료지만 기계변환 URDF의 프레임 뒤틀림(E16)이라 수식 유도 고위험 → 백로그 |
+| D14 | 정지 잔차 해법 = **Coulomb 마찰 FF(M-바깥) + 게이트 2종**, 연속 Ki 도입 안 함 (2026-07-31) | 실패 지점이 속도≈0이라 Kd 무효(#30 실증), 연속 Ki는 stiction·leash와 limit-cycle 위험 + refine이 이미 이산 적분기. 확정값 **KD 28/25/20 · KF_3 5.0 · KF_4 3.0**(cfg=오퍼레이터 상태, 커밋 안 함) — 도출·검증 전 과정 **§9.5** |
 
 **시뮬레이션 도입 판단 (2026-07-28)** — "백그라운드에서 검증하고 검증된 것만 실기 사용"에
 대한 결론:
@@ -210,8 +227,16 @@ RAON-RT는 이미 base_link로 변환된 좌표를 소비만 한다 — RAON-RT�
 (스모크 스크립트 + E8 키보드 가드 + 사건 방어책) → `2c8fae5` **Phase 4 준비** (런타임 enable
 픽스 + 'h'/'j' 서보 arm/disarm 인터록) → `1334658` run.sh 런처 → `d94c1c1` B6+게이트2 → `0668ed2` **refine 10.9 mm** →
 `8093e8a` **Phase 5 캘리브** (grabber/cpo 툴 + 16자세 데이터셋 + rPc + 박스 실측치) →
-`61a4a86` **E13 안전 IK + HOME + 브릿지 세션화** (접근 데모 완주 커밋).
-ros2_ws(main, 로컬): `a9644dc` **TF 정본화 + person_guard off** → `1470d98` docs.
+`61a4a86` **E13 안전 IK + HOME + 브릿지 세션화** (접근 데모 완주 커밋) →
+`19b15ba`/`f9a411b`/`0662b98` **ready-seed IK v1→v3**(D13·E19·E20) → `5140a83` sticky-float →
+`e69555c`/`1694414` E22/E23 게이트 재베이스 → `9aca402` E25/E26 → `3862570` E27 브랜치 가드 →
+`a0a2c26` **reach map**(+E28 픽스) → `929aa90`→`2e911a3` **다중 시드 IK**(E30) → `416da9a`
+캘리브 'w' 게이트 → `6bab43b`→`526f9b4` 접근 정확도 그래프(E31) → `592998e` **궤적 자동
+기록** → `bd01c6d`→`b884069` 궤적 그래프 2패널 스펙 → `49ac6db` F/T 페이로드 제거 A/B →
+`00c6d2c` **마찰 FF** → `9ba929d` refine scope gate(E33) → `90e5409` **lag gate**(E35) →
+`6c090ae` E34 chrt 자동화. 정밀화 트랙(#24~58) 상세는 **§9.5**.
+ros2_ws(main, 로컬): `a9644dc` **TF 정본화 + person_guard off** → `1470d98` docs → 이후
+docs 커밋 다수(`git log -- docs/RAON-RT/merge.md`가 타임라인).
 
 ## 4. 시스템 배치 현황 (보드, 전부 검증됨)
 
@@ -278,7 +303,8 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 | **5-4 접근 데모** | 'v' 라이브 lock→approach | ✅ (2026-07-27 심야, `61a4a86`) **1차 시도에서 테이블 충돌 사고(E13)** → 원인(점-구속 IK의 nullspace 방랑 + 무게이트 quintic) 제거 후 재시도: 수직 시작=게이트 거부(정상), 기울인 시작=orange/tennis_ball/banana 접근 성공, **물체 중앙 배치 후 접근→homing('b')→다음 물체 사이클로 전 클래스 성공**. apple(0.85 m)=reach 한계 거부, mustard(x 0.906)=박스 게이트 거부(정상). z마진 15 cm 상수 — 관측 편차는 표면기준+refine tol 12 mm+미모델 공구길이(내일 반영) 합성 |
 | **HOME 기능** | 메뉴 기록 + 'b' 복귀 | ✅ (2026-07-27, `61a4a86`) 'p' 메뉴 마지막 항목이 **현재 관절값 스냅샷**(IK 없음 = 브랜치 점프 원천 불가), 'b'가 속도상한 quintic으로 복귀. refine/접근 자동 취소. **07-27 주간**: HOME 미기록 시 'b'는 계산된 q_ready로 복귀(`19b15ba`) |
 | **grav-comp 보완 (F/T+sticky)** | 말단 페이로드 모델 + 침하 정지 | ✅ (2026-07-27 주간) URDF tcp에 **285 g**(RFT76-HA01 200 g + 어댑터판 등) 반영 — 1차에 +Z로 넣어 악화, **공구축=−X 함정**(E16) 교정 후 CoM (−0.021,0,0). 전방 뻗은 자세 잔류 sag는 모델 바닥(태그판 비자성=알루미늄 확인, 질량 추정 유지) → **sticky-float**가 완충: dead-band 앵커 스프링(0.15·Kp·0.03 rad 상한) + **속도게이트 완화판**(|qd|>0.08 rad/s면 앵커 추종=순수 grav-comp 감각, Kd 0.08→0.03) — **오퍼레이터 "이정도면 OK"**(`5140a83`). 'k' 토글 |
-| **ready-seed IK** | 접근 해의 시작자세 독립화 | 🔨 (2026-07-27, `19b15ba`→**v2 `f9a411b`**) **구현+빌드 완료, 실기 재검증 대기.** init에서 박스 중심 부트스트랩 → r-클램프 코너 8점을 런타임과 동일 방식(soft-R=q_ready의 R)으로 전수 검증 → `[SEED]` 부팅 로그. 매 'v'를 q_ready 시드로 해석(결정적), **2π 폴딩+관절한계 검사**(J3 10.42 rad류 감김 해 → −2.15 rad 등가해로 구제, legacy 경로에도 적용), Δq≤2.0 직행 / 초과 시 **자동 스테이징**(q_ready 경유, settle 0.2 s→goal 레그. 모드/서보 변동 시 즉시 취소=이연 모션 금지). 부트스트랩 실패 시 live-시드 폴백. **v1 필드 결함(E19)**: 합성 사다리가 손목 접힌 기형 브랜치(J4 2.61/J5 1.65)를 q_ready로 뽑아 "괴랄한 회전" → **v2 = 오퍼레이터 자세 앵커**: HOME 기록 시 그 자세로 즉시 re-base(`SetReadyAnchor`)+`$HOME/.indy7_ready_seed` 영속화(RT 메일박스→브릿지 워커 파일 IO), 다음 부팅은 파일 자세를 1순위 시드로. 사다리엔 \|J4\|,\|J5\|>2.0 거부 가드. 부팅 로그에 `[anchored to operator posture]`/`[synthetic — record HOME to re-base]` 표기 |
+| **ready-seed IK** | 접근 해의 시작자세 독립화 | ✅ (2026-07-27, `19b15ba`→**v2 `f9a411b`** — 같은 날 저녁 **v3 `0662b98` 실기 검증 완료**, §0/§7 E19·E20) init에서 박스 중심 부트스트랩 → r-클램프 코너 8점을 런타임과 동일 방식(soft-R=q_ready의 R)으로 전수 검증 → `[SEED]` 부팅 로그. 매 'v'를 q_ready 시드로 해석(결정적), **2π 폴딩+관절한계 검사**(J3 10.42 rad류 감김 해 → −2.15 rad 등가해로 구제, legacy 경로에도 적용), Δq≤2.0 직행 / 초과 시 **자동 스테이징**(q_ready 경유, settle 0.2 s→goal 레그. 모드/서보 변동 시 즉시 취소=이연 모션 금지). 부트스트랩 실패 시 live-시드 폴백. **v1 필드 결함(E19)**: 합성 사다리가 손목 접힌 기형 브랜치(J4 2.61/J5 1.65)를 q_ready로 뽑아 "괴랄한 회전" → **v2 = 오퍼레이터 자세 앵커**: HOME 기록 시 그 자세로 즉시 re-base(`SetReadyAnchor`)+`$HOME/.indy7_ready_seed` 영속화(RT 메일박스→브릿지 워커 파일 IO), 다음 부팅은 파일 자세를 1순위 시드로. 사다리엔 \|J4\|,\|J5\|>2.0 거부 가드. 부팅 로그에 `[anchored to operator posture]`/`[synthetic — record HOME to re-base]` 표기 |
+| **접근 정밀화 (원샷)** | first-pass 도달, refine 0회 | ✅ (2026-07-31, **§9.5**) Coulomb 마찰 FF(KF_3 5.0/KF_4 3.0, M-바깥) + 게이트 2종(refine scope + lag) → **#52~58 7/7 refine 0회**: HOME 출발 5물체 6.9~10.7 mm + **mustard→orange 전이 11.3 mm**, 전 로그 과주 0·갭 0%. KD 28/25/20(정확도 무효 판정 후 유지), 페이로드 0 g. 남은 오차 = 바이어스+j2 lag(파지 <5 mm 지렛대 = KF_2·바이어스 보정) |
 
 ## 6. 코드 변경 요약
 
@@ -286,20 +312,23 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 
 | 파일 | 변경 |
 |---|---|
-| `App/Indy7/Indy7Ctrl.{h,cpp}` | VisualServo 완전 제거(멤버·TASK5·구 'v'키·RT루프 주입블록·proc), `SetAsDCRef(slave0)` 가드콜 추가, calib 출력 경로 `App/CalibUtils/kv260/` · **Gate 2b**: 브릿지 수명주기(Init 비치명 실패 허용/DeInit), 'p'/숫자/'v' 키 핸들러(원자플래그만), RT 루프 goal 소비 SM('n'키 검증 시퀀스 재사용, ISO/RECT 상호배제·이동중 재트리거 금지) · **refine SM**(감쇠 편향+속도게이트, oriWeight=0) · **HOME**('p' 기록+'b' 복귀) · **서보-오프 goal 폐기 가드**(E15) · **ready-seed 접근**(`TryReadyApproach` 직행/스테이징 + `eAPPROACH_STAGING` 레그2: 모드·서보 불변시에만 발화) · init에서 박스 코너 프로브로 `ComputeReadySeed` 호출 · **접근 정확도 리포트**(2026-07-29, `EmitApproachReport`) — `eAPPROACH_MOVING→IDLE` 에지에서 1회, 목표(`m_vRefineDesired`) vs FK TCP + **refine 직전 TCP**(`m_vFirstTcp`, 첫 정착에서 캡처)를 브릿지 메일박스로. RT 경로라 `strncpy`(printf 계열 회피) |
+| `App/Indy7/Indy7Ctrl.{h,cpp}` | VisualServo 완전 제거(멤버·TASK5·구 'v'키·RT루프 주입블록·proc), `SetAsDCRef(slave0)` 가드콜 추가, calib 출력 경로 `App/CalibUtils/kv260/` · **Gate 2b**: 브릿지 수명주기(Init 비치명 실패 허용/DeInit), 'p'/숫자/'v' 키 핸들러(원자플래그만), RT 루프 goal 소비 SM('n'키 검증 시퀀스 재사용, ISO/RECT 상호배제·이동중 재트리거 금지) · **refine SM**(감쇠 편향+속도게이트, oriWeight=0) · **HOME**('p' 기록+'b' 복귀) · **서보-오프 goal 폐기 가드**(E15) · **ready-seed 접근**(`TryReadyApproach` 직행/스테이징 + `eAPPROACH_STAGING` 레그2: 모드·서보 불변시에만 발화) · init에서 박스 코너 프로브로 `ComputeReadySeed` 호출 · **접근 정확도 리포트**(2026-07-29, `EmitApproachReport`) — `eAPPROACH_MOVING→IDLE` 에지에서 1회, 목표(`m_vRefineDesired`) vs FK TCP + **refine 직전 TCP**(`m_vFirstTcp`, 첫 정착에서 캡처)를 브릿지 메일박스로. RT 경로라 `strncpy`(printf 계열 회피) · **마찰 FF 배선**(2026-07-31, `00c6d2c`: cfg vKf → `SetFrictionFF`, refine 사다리 호출엔 `adKfScale=0.0` 전달 `9ba929d`) |
 | `App/Indy7/Indy7Ctrl.{h,cpp}` (키) | **캘리브 캡처 게이트(2026-07-29, `416da9a`) — 실기 검증 완료(같은 날)** — `s`가 진단 출력처럼 보이면서 hand-eye 데이터셋을 무조건 덮어쓰던 것(원저자 `d38e9ec` 유래)을 `m_bCalibMode` 뒤로 가둠. `w`/`W`로 토글, **매 실행 OFF**. 쓰기 호출부는 `case 's'`의 2줄뿐이라 가드 하나로 완결(전 저장소 grep 확인). 배너는 `DoInput`이 **1 kHz RT 스레드**라 printf 1회로 합침 — 파일 IO가 RT 스레드에 있는 건 원래부터이고, 이 변경으로 기본 경로에서는 사라짐. ⚠️ `w`가 유일한 자유 알파벳이었다(`q`·`z`는 `proc_keyboard_control`이 선점). **오퍼레이터가 로봇에서 직접 확인**: 무장 전 `s` → `App/CalibUtils/kv260/` 무변경, `w` 무장 → `s` → 변경 발생, `w` 해제까지 전체 시퀀스 정상 |
 | `App/Indy7/CalibCapture.{h,cpp}` | **ViSP-free 재작성** — Eigen `AngleAxisd`로 theta-u 변환, `vpPoseVector::saveYAML` 포맷 호환(→ `eye_to_hand_calib.py` 무수정 소비) |
-| `App/Indy7/FullDynControllerRT.{h,cpp}` | x86 SSE 헤더 `__SSE__` 가드 (aarch64 빌드 차단 해소) · **E13 3중 방어**(soft-R IK·Δq 게이트·T 스케일링, FK 잔차 합격판정) · `IsTrajectoryRefDone()`(B7) · **sticky-float 홀드**(dead-band 앵커+속도게이트, 'k') · **ready-seed IK**(`ComputeReadySeed`/`SolveReadyIK`/2π 폴딩+관절한계/`ScaledTrajTime`, D13) |
+| `App/Indy7/FullDynControllerRT.{h,cpp}` | x86 SSE 헤더 `__SSE__` 가드 (aarch64 빌드 차단 해소) · **E13 3중 방어**(soft-R IK·Δq 게이트·T 스케일링, FK 잔차 합격판정) · `IsTrajectoryRefDone()`(B7) · **sticky-float 홀드**(dead-band 앵커+속도게이트, 'k') · **ready-seed IK**(`ComputeReadySeed`/`SolveReadyIK`/2π 폴딩+관절한계/`ScaledTrajTime`, D13) · **Coulomb 마찰 FF**(2026-07-31, §9.5): `SetFrictionFF`/`m_Kf`/`m_dKfScale`, `τ += KF_i·sat(q̇_ref/0.01)`을 **M(q) 곱 바깥에**(`00c6d2c`) + **refine scope gate**(per-trajectory `adKfScale`, `9ba929d`) + **lag gate**(`clamp((q_ref−q)·sign(q̇_ref)/0.002,0,1)` 곱, `90e5409`) |
 | `App/Indy7/indy7.urdf` | tcp 링크에 F/T 페이로드 **285 g @ CoM (−0.021,0,0)** — 공구축이 tcp 프레임 **−X**라는 경고 주석 포함(E16) → **2026-07-30 A/B로 페이로드 제거**(`49ac6db`, 0 g 복귀): 어댑터판 질량이 추정치였고 CoM 축(−X)도 07-29 실물 확인(+Z)과 모순 — 1차 착지가 **위(+z)** 로 뜨는 원인 후보. kinematics 불변(fk_replay byte-identical)이라 캘리브·reach map 유효. 복원=`git checkout 9dc5ae3 -- App/Indy7/indy7.urdf` |
 | `App/Indy7/Makefile` | ViSP/librealsense/OpenCV/PCL 제거, `RBDL_DIR` override 추가 · **Gate 2b**: humble+my_interfaces 배선(E5의 include **화이트리스트** 방식), rpath 내장(ROS env source 불필요), `make gate2b_test` 타깃 |
 | `App/Indy7/ROS2PickBridge.{h,cpp}` | **신규(Gate 2b)** — `/pick_target_base`·`/detections` 구독 + `AsyncParametersClient`로 `desired_class` LIVE 설정. 스레딩 계약: ROS2 I/O·메뉴·통계게이트는 브릿지 자체 non-RT 스레드(spin+worker), RT는 wait-free 원자 API+SPSC goal 슬롯만. `SignalHandlerOptions::None`(앱 SIGINT 보존). 게이트: N=15, 축별 std<8 mm, 워크스페이스 박스 실측치+**radial 게이트 r≤0.80**, z마진 0.15 m · E14 세션 위생(lock 방송 세션화·lost 1 s 디바운스·desired_class 자동 초기화) · 메뉴 HOME 기록 항목 · 박스 상수 public(ready-seed 프로브 파생용) · **접근 리포트 메일박스**(2026-07-29, `ApproachReport`/`LogApproach`/`TickApproachLog`) — seed-persist와 동일 SPSC 계약, RT는 POD 채우고 반환·워커가 시각 스탬프+CSV append. 슬롯 점유 중 재요청은 **드롭**(RT 블로킹 금지) |
-| `tools/approach_plot.py` | **신규(2026-07-29)** — 접근 정확도 그래프 자동 생성. `approach_log.csv`를 폴링해 접근 1회당 PNG 1장과 누적 `approach_history.png`. 구성: **① 3D 목표-vs-도달**(원점=목표, 5/12 mm 허용 구, ±15 mm로 확대) **② 실척 측면도**(물체·호버 150 mm·도달을 축척 그대로 — 3D 패널엔 물체를 못 넣는다, 10배 축소하면 mm가 사라지므로) **③ 축별 막대 ④ 숫자 패널**. **앱이 직접 그리지 않는 이유**: `mlockall` + 1 kHz RT 프로세스에서 `fork()`는 전 쓰기페이지를 COW로 표시해 **RT 스레드의 다음 쓰기가 폴트**를 먹는다 → 별도 프로세스 폴링. `run.sh`가 `--watch --exit-with-parent`로 자동 기동(`exec`이 셸을 앱으로 치환하므로 워처의 부모 = 앱 → 앱 종료시 자동 회수). `INDY7_NO_PLOT=1`로 끔. matplotlib+numpy만 사용(pandas 보드에 없음), 라벨 전부 영문(한글 폰트 부재) |
+| `tools/approach_plot.py` | **신규(2026-07-29)** — 접근 정확도 그래프 자동 생성. `approach_log.csv`를 폴링해 접근 1회당 PNG 1장과 누적 `approach_history.png`. 구성: **① 3D 목표-vs-도달**(원점=목표, 5/12 mm 허용 구, ±15 mm로 확대) **② 실척 측면도**(물체·호버 150 mm·도달을 축척 그대로 — 3D 패널엔 물체를 못 넣는다, 10배 축소하면 mm가 사라지므로) **③ 축별 막대 ④ 숫자 패널**. **앱이 직접 그리지 않는 이유**: `mlockall` + 1 kHz RT 프로세스에서 `fork()`는 전 쓰기페이지를 COW로 표시해 **RT 스레드의 다음 쓰기가 폴트**를 먹는다 → 별도 프로세스 폴링. `run.sh`가 `--watch --exit-with-parent`로 자동 기동(`exec`이 셸을 앱으로 치환하므로 워처의 부모 = 앱 → 앱 종료시 자동 회수). `INDY7_NO_PLOT=1`로 끔. matplotlib+numpy만 사용(pandas 보드에 없음), 라벨 전부 영문(한글 폰트 부재) · **궤적 그래프 `plot_traj` 추가**(2026-07-30~31, `bd01c6d`→`0550e47`→`9606588`→`91d7fb4`→`a09f129`→`3bc5336`→`b884069`): DataLog+fk_replay 짝을 사용자 스펙 **2패널**로 — ① 3D = one-shot plan(이론)+actual(실제)+○(원래 목표=호버점) ② 변위 1 plot = IK입력/FK(q_ref)/FK(q_act) 3계열 + refine 세로 점선, RT-FK 교차검증 배지 |
 | `tools/fk_replay.cpp` | **신규(2026-07-30)** — DataLog(관절 로그) → task-space 변환기. `q_ref`/`q`를 **로봇과 같은 `FullDynControllerRT.o`를 링크한 `ToolPosAt()`**(신설, `ToolRotAt` 미러)으로 FK → `ref_*`/`act_fk_*` 6열 append. `act_fk_*`는 RT가 기록한 `tcp_*`와의 **상시 교차검증용**(실기 24k행에서 max **0.002 mm** = CSV 반올림 잡음). `make fk_replay` |
+| `tools/traj_plot_selfcheck.py` | **신규(2026-07-30)** — 합성 접근(droop 37 mm·0.65 재조준·IK 잔차 2 mm)을 `plot_traj`에 직접 주입하는 자가검증 — 은퇴한 RECT 빌린 스모크 입력의 대체(`3bc5336`) |
+| `App/Indy7/run.sh` + `tools/install_ecat_op_fifo.sh` | **E34 자동화(2026-07-31, `6c090ae`)** — run.sh가 백그라운드 워처로 `EtherCAT-OP` 커널 스레드 출현을 대기(0.5 s×180) 후 고정 명령 wrapper `/usr/local/sbin/ecat-op-fifo`(sudoers NOPASSWD)로 **SCHED_FIFO 40** 부여. **1회 설치**: `sudo bash tools/install_ecat_op_fifo.sh`(미설치 시 앱 콘솔 WARN + 수동 명령 안내) |
+| `CRobot/ConfigRobot.{h,cpp}` | `[SYSTEM] KF_n` 파싱(`vKf`, 키 없음=0.0=기능 꺼짐) — 마찰 FF 배선의 cfg 쪽 절반(`00c6d2c`) |
 | `tools/gate2b_bridge_test.cpp` | 브릿지 단독 하네스(EtherCAT/로봇 불필요) — stdin 명령 p/숫자/v/q, RT 소비자 대역 poller |
 | `tools/test_gate2b_bridge.py` | 합성 검증 드라이버 — 실브릿지+실 pick_logic 노드 vs 합성 `/detections`·`/pick_target_base` 피더. C1 메뉴 / C2 param ack / C3 `ros2 param get` 실증 / C4 lock / C5 게이트 통과 goal(z=0.27). E1~E3 방어 패턴 이식 |
 | `tools/test_phase3_smoke.py` | **Phase 3 정본 스크립트** — P0 preflight(rtprio/memlock/슬레이브/중복실행) → P1 파이프라인 기능적 대기 → P2 앱+OP → P3 홀드(`--hold N`, E9 규칙) → P4 in-app 'p'/선택/'v' → P5 축별 SDO → P6 SIGINT DeInit 검증. `--app-only` 격리 스테이지. 앱 실행에 `MALLOC_ARENA_MAX=2`+`stdbuf -oL` |
 | `App/Indy7/Indy7Ctrl.cpp` (keyboard) | E8 개행 가드 — '\n'/'\r'는 키로 취급 안 함 |
-| `App/Indy7/INDY7.cfg` | **전 축 `AUTO_SERVO_ON=0`**, `ENABLE_CONTROLLER_AT_STARTUP=0`, 5태스크(VS 태스크 제거), 경로 로컬화, DC 실험용 주석 템플릿 |
+| `App/Indy7/INDY7.cfg` | **전 축 `AUTO_SERVO_ON=0`**, `ENABLE_CONTROLLER_AT_STARTUP=0`, 5태스크(VS 태스크 제거), 경로 로컬화, DC 실험용 주석 템플릿 — ⚠️ **이후 오퍼레이터 상태로 운영(커밋 안 함)**: 현행 `[TASKn] CPU=3`(D10) · **KD_3/4/5 28/25/20 · KF_3 5.0/KF_4 3.0**(2026-07-31) — 값의 정본과 근거는 §9.5 타임라인 표 |
 | `EMasterApp/Device/EcatSlaveBase.{h,cpp}` | `RegisterPDOEntry` **UINT32→INT64** (내부 `<0` 체크도 unsigned라 이중 사망 상태였음) |
 | `EMasterApp/Device/Slave{CIA402Base,NRMKEndTool}.cpp` | **죽어있던 PDO 실패 가드 27개 소생** — signed 임시변수 캡처(대입식이 unsigned면 반환형만 고쳐도 무효) |
 | `CRobot/AxisCIA402.h` | `GetEcatSlave()` 접근자 (DC ref 지정용) |
@@ -369,6 +398,7 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 | **E29 (미해결·설계상 한계)** | **reach map이 밝힌 진짜 그림(2026-07-28 18:25)**: 박스 안에서 **거부 사유는 사실상 BRANCH 하나뿐**이다 — 28,515셀 스윕(z 0.15~0.35, 1 cm)에서 PASS 27,132 / **BRANCH 1,345** / LIMITS 38 / **TILT 0 / NO_SOLUTION 0**. 즉 **"멀어서 못 간다"는 경우는 박스 안에 없고**, 60° 자세 캡도 한 번도 발동하지 않는다. 위험 지대는 두 곳: ⑴ **먼 +y 바깥 모서리**, 높이에 따라 급격히 커짐(z 0.15 거의 없음 → z 0.35 큰 덩어리) — mustard가 정확히 그 가장자리, ⑵ 베이스 근처 x≈0.30~0.40 블롭(LIMITS 몇 셀 포함). **★ E27의 "2 mm가 성패를 가른다"는 표현은 경계가 날카롭다는 뜻으로 읽히는데, 1 mm 정밀 스윕 결과는 그보다 나쁘다**: y=0.234·z=0.30 라인에서 x 0.814~0.846 구간이 **32 mm 폭의 얼룩덜룩한 혼합 지대**(PASS/BRANCH가 1 mm 단위로 교대, 창 전체 통과율 50.7%)이고 **mustard(x 0.828)는 그 한가운데**. 그래서 **2 mm 옮기는 건 대책이 못 된다** — 동전던지기의 다른 면일 뿐. 정량: ±5 mm 지터에 견디려면 **14 mm 이동**((0.818, 0.224)), ±10 mm면 19 mm, ±15 mm면 25 mm | 단기 운용: **물체를 1.5~2.5 cm 안쪽으로**. 근본: 경계 위치는 **앵커(q_ready)의 함수**이므로 `--seed`를 바꿔 스윕하면 "어느 HOME이 박스를 가장 넓게 덮나"를 계산으로 고를 수 있다(미실행). 그 뒤에도 남는 것은 **RBDL local IK의 구조적 한계** — analytic IK나 브랜치 열거로 가야 근본 해결 |
 | **E30✅** | **다중 시드 IK — 실기 검증 완료(2026-07-29 14:41, RAON `2e911a3`)**: E27/E29의 브랜치 플립을 솔버 쪽에서 푼 것. **핵심은 시드가 아니었다.** 설계는 "q_ready에서 8개 브랜치 시드로 팬아웃"이었는데, 실제로 효과를 낸 것은 **1b단계 — warm-start를 거치지 않고 q_ready에서 곧장 w=0을 푸는 solve 한 번**이었다. 사다리의 warm-start 체인은 자세 품질을 만들어내지만(tilt 3° vs 무웜스타트 55°) **바로 그 체인이 E27 목표에서 뒤집힌 골짜기로 끌고 간다**. 스윕 기준 1,220개 회복 셀 중 **시드 팬아웃 기여는 132개(11%)**, 나머지 ~1,088개가 1b단계. **⚠️ 첫 설계는 틀렸다** — 사다리를 "골짜기를 못 바꾸니 잉여"로 보고 들어냈더니 판정은 살았지만 살린 목표가 전부 tilt 53~57°가 됐다. 구조를 **"1단계=기준선 경로 통째, 실패했을 때만 다중 시드"**로 바꿔 회귀를 원리적으로 차단 | (`929aa90`→`2e911a3`) **사전 선언한 합격조건 4개 중 3개 통과**: ①잃은 셀 **0** ②필드 23점 PASS 17→22·BRANCH 6→0 ③최악 시간 55.24→**58.49 ms 실패**(기준선에서 물려받은 사다리 구간이 원인, 시드 구간 최악은 43.62 ms — 2단계를 빼도 안 고쳐짐) ④머스타드 1 mm 창 통과율 50.7→**87.0%**. 박스 커버율 **95.1→99.4%**, BRANCH 1,345→14, LIMITS 38→0. **★ 실기 검증(예측을 먼저 기록)**: 기준선이 `(0.699,0.357,0.392)`에서 `J2 2.70 rad` 거부 → B안이 **같은 목표를 접근**(refine 70.0→6.9 mm, 2 pass). 지도의 사전 예측 `PASS/w=0.00/seed 0/8 solve/gap 0.39 J2/tilt 29°/16.3 ms` vs 실기 `…/14.92 ms` — **전 필드 일치**. 회귀 시험: 5클래스 전부 정상. **버스**: SM 워치독 **100 ms**(7슬레이브 `0x0400`=2498, `0x0420`=1000), 14.92 ms 정체에 **Lost frames 델타 0**. 오퍼레이터 관찰: 동작 매끄러움·충돌 위험 없음. **미해결**: ⑴ 최악 시간은 여전히 예산 초과(빚으로 남김) ⑵ 살린 목표들이 **tilt 47~57°** — hover는 되나 top-down 파지엔 부적합할 수 있음, 그리퍼 도착 시 재검토 ⑶ 2단계(시드 팬아웃)가 이긴 132셀은 **실기 미검증** |
 | **E31✅** | **그래프 원점 오해 — 로봇이 아니라 그림이 틀렸다(2026-07-29 저녁)**: 접근 정확도 그래프 첫 실기분을 본 오퍼레이터가 "눈으로 보면 말단부가 모든 물체 **위**에 있는데 그래프의 ΔZ는 몇 mm뿐 — 이상하다"고 지적. **로봇도 그래프도 맞았고 라벨이 틀렸다.** `ROS2PickBridge.cpp:643`이 `dGoal[2] = 물체 z + 0.15`로 **호버 마진을 목표에 이미 굽는다** → 그래프의 원점은 **물체가 아니라 호버 지점**이고, 실측 TCP는 물체 **141~161 mm 위**(관찰과 정확히 일치). **자초한 회귀**: 첫 판본에는 `hover margin: 150 mm above the object` 줄이 있었는데 "단순화" 요청에 응하면서 그 줄을 빼버렸고, 그 순간 그림만으로는 원점이 물체인지 호버인지 판별 불가능해졌다. **교훈: 시각화에서 "무엇을 뺄까"를 고를 때, 좌표계 기준을 알려주는 항목은 장식이 아니라 축 라벨이다** | (`762a98c`→`526f9b4`) 3D 패널 제목이 원점을 명시하고, 숫자 패널에 `object [m]`·`target = object z +150 mm`·`→ N mm above the object`(파란색) 추가. 물체 자체는 **실척 측면도 패널**로 별도 표시 — 3D 패널은 ±15 mm 확대라 150 mm 아래 물체를 넣으려면 10배 축소해야 하고 그러면 정작 봐야 할 mm가 사라진다. **오탐이었지만 값어치가 있었다** — 이 지표가 재지 **않는** 것 두 가지(캘리브 편향·FK 자체)를 문서에 명문화하는 계기 |
+| **E32~E35✅** | 정밀화 트랙(2026-07-31)의 사고·함정 4건: **E32** RT 스톨로 #27~29 오염 · **E33** FF leash-release 캐터펄트(#34/38/39 발산) · **E34** 스톨 진범 = IgH master priority inversion(#40 확정) · **E35** FF 소이동 과주(mustard 미스 부호 반전) | 상세·수정·검증 전부 **§9.5**(타임라인 재구성 시 그쪽으로 통합 — 대장에는 이 색인만). 수정: E33→scope gate `9ba929d` / E34→chrt 자동화 `6c090ae`+조용한 보드 수칙 / E35→lag gate `90e5409` |
 
 > **철회 기록(2026-07-28 04:00)**: 03:50에 "J2가 잠겨 있어 실질 5-DOF"라는 제보가 있어
 > 그 전제로 전면 재해석을 기록했으나(커밋 `29b40cd`/`9d7a7c5`), **오퍼레이터가 착각으로 정정** —
@@ -444,14 +474,16 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
     참고로 현행 앵커는 n/8이 만점이어도 z=0.30에서 6.4%가 BRANCH다 — 두 지표는 별개다
   - ⚠️ **충돌 모델이 없다**. 테이블·카메라·물체·자기 링크 전부 미반영이므로 PASS는
     "IK가 이 점을 받는다"이지 "팔이 안전하게 간다"가 아니다. 그 검증은 MuJoCo 몫(§2)
-- **다음(즉시) ①: 앵커 비교 스윕** — 경계 위치는 q_ready의 함수다. `--seed`를 바꿔가며
+- **앵커 비교 스윕(백로그로 강등)** — 경계 위치는 q_ready의 함수다. `--seed`를 바꿔가며
   같은 스윕을 돌리면 **"어느 HOME 자세가 박스를 가장 넓게 덮나"를 계산으로 고를 수 있다**
-  (지금까지는 사람이 팔을 놓아보고 n/8을 읽는 방식). 후보 시드는 `~/.indy7_ready_seed.*`
-  백업들 + 새로 기록할 몇 개
+  (지금까지는 사람이 팔을 놓아보고 n/8을 읽는 방식). **부분 실행(07-29 저녁, §0 E31 옆)**:
+  합성 수직 앵커 1개 스윕 → 역효과(PASS 96.5→83.2%) 확인, 체계적 후보 스윕은 미실행.
+  E30 다중 시드가 브랜치 문제를 대부분 해소해 시급성 하락. 후보 시드는
+  `~/.indy7_ready_seed.*` 백업들
 - 다중 시드 IK — **완료·실기 검증·병합(2026-07-29, RAON `2e911a3`)** — §7 **E30**. 브랜치 플립
   거부가 박스에서 사실상 소멸(1,345 → 14셀), 커버율 95.1 → 99.4%. **효과의 89%는 시드 팬아웃이
   아니라 warm-start를 건너뛴 solve 한 번**이었다는 점이 이 작업의 실질 교훈
-- **다음(즉시) ①: IK를 RT 스레드 밖으로** — 사다리가 최대 **56 ms**를 1 kHz 루프 안에서 쓴다
+- **다음(즉시): IK를 RT 스레드 밖으로** — 사다리가 최대 **56 ms**를 1 kHz 루프 안에서 쓴다
   (§7 E25/E27). 브릿지의 non-RT 워커에 **별도 RBDL 모델 인스턴스**(모델이 스레드 안전하지
   않음)를 두고 solve를 시킨 뒤 RT에는 완성된 관절 벡터만 넘긴다. 예산 조이기는 이미 시도했고
   해가 망가져 되돌렸으므로, 이게 유일하게 남은 정공법
@@ -509,7 +541,7 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   `IK_POS_TOL_M 2 mm`는 **사고 한 건을 막으려 고른 값이지 최적화된 값이 아니다**(60°는
   "원거리 41~48°가 실제로 되더라"는 데이터 몇 점 위에 여유를 얹은 것). 재조정할 일이 생기면
   이 차이를 기억할 것
-- 접근 궤적 자동 기록·3계열 그래프 — **구현 완료(2026-07-30, RAON `592998e`) — 실기 최종 확인 대기**:
+- 접근 궤적 자동 기록·3계열 그래프 — **구현+실기 검증 완료(2026-07-30, RAON `592998e`)**:
   접근마다 **DataLog 1파일 = 접근 1회**가 자동 생성되고, 워처가 `approach_NNN_<class>_traj.png`
   (3D 경로 + **시작점 기준 변위 |P(t)−P0| 1패널** + 목표거리 패널; X/Y/Z 3패널은 07-30
   사용자 요청으로 변위 1패널에 병합, RAON `bd01c6d` · **one-shot plan 곡선** 추가 `0550e47`+`9606588` —
@@ -535,10 +567,10 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   <5 mm 정밀도(게인/적분 검토, refine 바닥 12 mm), top-down 고정 R, 물체 6D pose
   estimation(나중 — 들어오면 soft-R 타깃만 물체 기준으로 교체)
 - **D10 3+1 격리 배치 완료(2026-07-27 22~23시)** — cmdline + cfg `CPU=` 키 + /proc 토폴로지
-  확인 + EtherCAT OP/Lost 재베이스. **순수 지터 A/B만 미완**: 앱의 RT97/95가 같은 CPU3를
-  점유해 gate0(prio 90)이 앱 뒤에 줄서는 값을 재는 오염 발생 → **앱 정지 상태**에서 gate0을
-  CPU3/CPU0으로 각각 돌려야 유효. 비격리 베이스라인: CPU3 avg 1.0/max 33.9 µs,
-  CPU0 avg 1.2/max 104 µs
+  확인 + EtherCAT OP/Lost 재베이스. 순수 지터 A/B는 당시 앱의 RT97/95가 같은 CPU3를 점유해
+  오염(미완)이었으나 → **완결(07-28 17:02, §0)**: 앱 정지 상태에서 격리 CPU3 avg 4.3/max
+  **51.1 µs** vs 비격리 CPU0 avg 7.3/max **114.6 µs**. 참고 비격리 베이스라인(부하 중):
+  CPU3 avg 1.0/max 33.9 µs, CPU0 avg 1.2/max 104 µs
 - **EtherCAT I/O는 격리 코어 밖(CPU1)에서 돈다 — 확인됐고, 현재는 유지가 정답**(§4.1).
   `irqaffinity=0-2`가 의도적으로 CPU3을 뺐고, IRQ 스레드가 FIFO 50이라 비전 파이프라인에
   밀리지 않으며, CPU1엔 경쟁자가 없다. Lost 델타 0으로 관측 비용도 없음. **⚠️ CPU3으로
@@ -775,12 +807,20 @@ DataLog CSV에 남는다.
 ## 10. 재개 가이드 (새 세션용)
 
 1. 이 문서 + 메모리 `raon-vs-merge-plan.md`부터. RAON-RT 코드 질문은 재탐색 말고
-   `~/RAON-RT_guide_for_CLAUDE.md`의 해당 §.
+   `~/RAON-RT_guide_for_CLAUDE.md`의 해당 §. 정밀화 트랙(마찰 FF·KD/KF·E32~E35·원샷)은
+   **§9.5**가 정본.
 2. 작업은 `~/RAON-RT-Revision` **kv260-merge 브랜치에서만**. lab 저장소 push 금지.
 3. EMasterApp 수정 시 실행 전 `sudo make install` (루트에서) — /opt가 런타임 정본.
 4. 로봇 전원만 켜면 `ethercat slaves`로 7슬레이브 즉시 확인 가능(일반유저 CLI 가능).
 5. sudo가 필요한 단계는 명령을 준비해 사용자에게 요청(비대화형 sudo 불가).
 6. **운영 수칙(E24 이후 갱신)**
+   - **E34(2026-07-31)**: EtherCAT-OP의 FIFO 40 승격은 **run.sh가 자동 처리**(성공 시 콘솔
+     `[run.sh] EtherCAT-OP -> SCHED_FIFO 40 (E34 auto)`). 전제 = **1회 설치**
+     `sudo bash tools/install_ecat_op_fifo.sh`(미설치면 WARN + 수동 명령 안내).
+     **실기 세션 중 보드에서 빌드·무거운 분석·에이전트 금지** — 위반 증상 = 갭/슬로모션/
+     "덜덜"(§9.5 ④). 의심되면 DataLog Δt 갭 체크(§9.5).
+   - **HOME을 재기록하면 reach map은 무효**(§0 07-29 앵커 민감도) — 좌표를 뽑아 쓸 땐
+     현재 앵커로 재계산.
    - 세션 첫 행동 = **자연 자세에서 HOME 기록**(앵커). 전 생애 1회지만 앵커가 오염되면 재기록.
    - **종료 자세는 이제 무관**(AXIS4/5도 HOMING_METHOD=3 → POS_BEFORE_EXIT를 아무도 안 읽음).
      "팔을 세워두고 종료" 규칙은 폐기.
