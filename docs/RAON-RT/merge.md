@@ -599,6 +599,12 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   **처방**: ① 앱 시작 후 `sudo chrt -f -p 40 $(pgrep -x EtherCAT-OP)` (OP 스레드는 앱마다 재생성되므로
   세션마다; IDLE도 무해) ② 실기 세션 중 보드에서 빌드/무거운 분석 금지(운영 수칙) ③ 장기적으론 IgH
   master 스레드 FIFO화 패치/재빌드 옵션. **#40 데이터는 FF-gate 판정에 사용 금지** — 재실험 필요.
+  **검증 완료(#41~46, 07-31 02:00)**: 6/6 로그 갭 0.0%(E34 처방/조용한 보드 하) + **E33 FF-gate 실증** —
+  발산 소멸(refine 1~2회, final 3.45~9.57 mm 전원 합격, j3 캐터펄트 패턴 소멸), FF의 큰-이동 이득 유지
+  (apple 17.2 vs pre-FF ~50 / tennis 17.4 vs ~43 / orange 31 vs 37~94 mm). banana 47(z/j4 지배, KF_4=0
+  이라 불변=예상대로). ⚠️ **mustard 1차 미스는 FF 시대에 일관 악화**(26→57.7 mm, #39·#46 동일) —
+  j3 FF가 mustard 접근 방향에서 역효과인지 배치 변화인지 미해명(수렴은 정상이라 운영 지장 없음).
+  다음 후보: KF_4≈1.5 시험(FF-gate가 refine을 보호하므로 이전보다 안전) + mustard 방향성 조사.
   → 스코프 게이트로 해결(`9ba929d`)**: 큰 이동은 극적 개선(tennis first 9.97 mm·refine 0회 역대
   최고, apple 20 vs 50 mm) — 그러나 #34/38/39는 refine 6회 상한 소진 후 **final이 first보다 악화**
   (73/59/73 mm), 육안으론 "마지막에 좌우 왕복". 메커니즘: 첫 이동이 leash(0.15 rad)에 물린 채 끝나면
