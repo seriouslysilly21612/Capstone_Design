@@ -529,6 +529,30 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   `tools/traj_plot_selfcheck.py`(합성 접근: droop 37 mm·0.65 재조준·IK 잔차 2 mm를 plot_traj에 직접
   주입)로 대체, 기하 검증: X-○ 1.6 mm 포개짐·`+` 24 mm 분리·final miss 8.1 mm=제목 일치.
   **실기 검증 완료(2026-07-30 저녁)**: 접근 23건+ 그래프 자동 생성, 실데이터 교차검증 배지 0.002 mm.
+- **Kd vs Ki 분석(2026-07-31, F/T 제거 A/B #24~26 + DataLog 관절 단위 판독)**:
+  ① **A/B 판정 — 페이로드 모델 제거는 미스를 줄이지 않고 회전시킴**(banana 1차 미스 y +28→−23 mm 부호 플립,
+  크기 46→40 mm; 손목 T-end shortfall은 오히려 악화 j4 −0.18→−0.25 rad, j3 신규 leash — 실물 285 g이
+  장착된 채 모델만 뺐으니 당연) → **정답은 어댑터판 실측 후 +Z CoM으로 복원**. 단 banana 짝은 IK 해가
+  손목 요구를 2배로 바꿔 순수 A/B가 아님(주의).
+  ② **1차 미스의 지배 관절은 항상 손목**: j0~j2는 전 로그 82~99% 추종, j4는 0.1~33%(row23/26은 아예
+  0.1%), j5는 **전 로그 0%**(0.39 rad 명령에도 τ≤0.05 Nm — M55·Kp·e 산수 그대로, 자세 오차로 숨음).
+  ③ **stiction 직접 증거**: j3 breakaway — 움직일 땐 |τ| 7.6~10.6 Nm, 정지 순간 7.21 Nm
+  (**유지엔 충분했던 토크가 재기동엔 불충분** = 정적마찰); j4는 목표 방향이 −인데 τ가 늘 +0.8~+3.8 Nm
+  (중력 유지 우세, inertia-scaled PD ~0.65 Nm로는 부호 못 뒤집음).
+  ④ **클리어된 용의자**: 토크 포화 없음(리밋 자체가 미배선 — Indy7Ctrl.cpp:408이 TORQUE_LIMIT_U 대신
+  L/JERK를 넘기고 Axis.cpp CheckLimits 주석처리, 실측 τ도 한계 미접근); qd 스케일 정상(PDO vs dq/dt
+  중앙값 비 0.990~1.000); **게인은 fork 이후 무변경**(cfg KP 800/600/400/200/150/100,
+  KD 80/60/40/20/15/10 = 원작자 값 그대로).
+  ⑤ **leash(MAX_REF_LEAD 0.15)는 원작자 코드**(d34d1fd 2026-05-17, fork 이전) — 전 4로그에서 발동,
+  정적 푸시 상한을 M_jj·Kp_j·0.15(j4 ≈0.65 Nm)로 못박음.
+  ⑥ **Kd 권장(원작자 제안 평가)**: ζ=Kd/2√Kp → j0~j2는 1.0~1.41(그대로), 손목만 저감쇠
+  j3 0.71/j4 0.61/j5 0.50 → **KD_3 20→28, KD_4 15→25, KD_5 10→20**(ζ=1, cfg만 수정)이 1단계.
+  단 **기록된 실패는 속도≈0 지점이라 Kd 항이 구조적으로 0** — 이동 중 추종만 개선 기대, 정지 잔차엔 무효.
+  ⑦ **Ki 판정**: 증상(정지 잔차)은 적분류가 맞지만 진범은 **마찰 미모델**(URDF friction 태그는
+  rbdl-orb urdfreader가 아예 파싱 안 함 = dead data) + **PD-inside-M 구조의 손목 저권한**. 연속 Ki는
+  stiction·leash와 얽혀 limit-cycle 위험, **refine이 이미 이산 적분기로 수렴 실증**(finals 5.2~11.5 mm).
+  다음 후보: 마찰 feedforward(sign(qd_ref)·Coulomb, j3≈7 Nm급) 또는 손목 Kp 인상/PD-outside-M
+  (eFullDynamics 모드가 코드에 이미 존재).
   **첫 실기 판독 성과 — settle leash 발견**: banana #23에서 one-shot plan 끝의 "+6.4 mm 상승"을
   DataLog로 추적 → pass-1 계획은 t=2.97에 목표 0.00 mm 도달, 궤적 시간 종료 순간 `MAX_REF_LEAD
   0.15 rad`(FullDynControllerRT.cpp:1417, 궤적 종료 후 reference가 실측보다 0.15 rad 이상 앞서지
