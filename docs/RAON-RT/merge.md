@@ -518,11 +518,14 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   pass-1 경계는 goal 스텝 크기 <80 mm 휴리스틱으로 refine 편향/staging leg-2를 구분)를 만든다.
   **원점 재정의(`a09f129`)**: 3D의 `+`는 bias 포함 **최종 조준점**이라 X와 안 겹치는 게 정상 —
   ○(**원래 목표**=호버점, 첫 refine 편향 직전의 goal) 마커를 추가해 X가 ○ 위에 포개지는 것(≤2 mm,
-  IK Accept 잔차)이 정상 판독이 되게 함. **목표거리 패널도 원래 목표 기준으로 변경** — 이전엔 이동하는
-  편향 goal 기준이라 마지막 plateau가 제목의 final miss와 어긋났음(≈|bias−miss|); 이제 plateau=final
-  miss로 일치하고 12/5 mm 선이 문자 그대로 적용되며, 회색(|orig−ref|)이 1차 끝 ~0 → bias 거리에
-  주차하는 모양으로 **의도적 overshoot이 그대로 보임**. 합성 접근(droop 37 mm·0.65 재조준·잔차
-  2 mm)으로 기하 검증: X-○ 1.6 mm, `+` 24 mm 분리, plateau 8.1 mm=제목 일치. 3계열 = **IK 입력**(goal+refine
+  IK Accept 잔차)이 정상 판독이 되게 함.
+  **최종 레이아웃 = 사용자 스펙 2패널 고정(`3bc5336`)**: ① 3D = **one-shot plan(이론)과 actual(실제)
+  둘만**(reference 선 제거; 재조준은 actual 경로와 세로 점선으로 보임) + ○/`+`/start 마커,
+  ② displacement 1개 plot = **IK 입력(호버점, 점이므로 수평선)/FK(q_ref)/FK(q_act) 3계열**.
+  목표거리 패널은 스펙에 따라 제거 — miss 수치는 제목 final miss와 정확도 PNG가 담당.
+  **RECT 빌린 스모크 입력 은퇴**: goal 열이 무의미한 임시 입력이었고 측정 로직 문제가 아니었음 —
+  `tools/traj_plot_selfcheck.py`(합성 접근: droop 37 mm·0.65 재조준·IK 잔차 2 mm를 plot_traj에 직접
+  주입)로 대체, 기하 검증: X-○ 1.6 mm 포개짐·`+` 24 mm 분리·final miss 8.1 mm=제목 일치. 3계열 = **IK 입력**(goal+refine
   편향 스텝) / **FK(q_ref)**(레퍼런스) / **FK(q_act)**(실측) — refine이 왜 2~3 pass 필요한지를
   그림 한 장으로 보여주는 도구(ref는 명령점에 도달, act는 못 미침 = CTC 무적분+stiction;
   편향 스텝이 ref를 goal 너머로 밀어 act를 goal에 얹는 과정이 수직 점선으로 표시).
