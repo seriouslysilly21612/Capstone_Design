@@ -142,7 +142,7 @@
 RAON-RT는 이미 base_link로 변환된 좌표를 소비만 한다 — RAON-RT의 rMc/VS 변환 기계는 안 쓴다.
 실제 남은 일은 코드 이동이 아니라:
 
-1. ~~placeholder TF 정본화~~ **완료(2026-07-27)**: rMc(base→color 광학) t=(0.7612, -0.0997,
+1. placeholder TF 정본화 — **완료(2026-07-27)**: rMc(base→color 광학) t=(0.7612, -0.0997,
    0.9262), 광축이 base -Z에서 5.6° 기울어진 top-down. launch의 정적 TF는
    `base_link→camera_link` = rMc·inv(camera_link→color_optical, realsense 라이브 TF 실측)
    — RPY가 pitch 90° gimbal 특이점 근처라 **의도적으로 quaternion 표기**
@@ -170,7 +170,7 @@ RAON-RT는 이미 base_link로 변환된 좌표를 소비만 한다 — RAON-RT�
 | D7 | person 안전 = **근접(대형 bbox)만 차단+래치** | 배경 통행인엔 무반응, 워크스페이스 접근 시 타깃 무효화 |
 | D8 | 슬레이브 DC = **저자 구성 그대로 OFF(SM-sync)로 브링업** | INDY7.cfg에 `DC_SUPPORT` 키 자체가 없음(기본 0) = 저자의 검증된 구동 상태. DC 실험은 cfg 주석 해제로(코드 준비됨) |
 | D9 | 사이클 = **1 ms 유지** | `m_dt=0.001` 하드코딩과 결합돼 있고, 동급 GEM 실측 "1 ms 안정" 근거. 2 ms 완충안은 폐기 |
-| D10 | 3+1 코어 격리 = ~~보류~~ → **착수(2026-07-27 밤, 오퍼레이터 지시 — 그리퍼 대기 중 인프라 작업)** | RT-POSIX가 전 태스크를 CPU0에 기본 pin(`posix_rt.c:257`) → isolcpus만으론 무효, 앱 pin 코드와 한 세트. **실증 확인(2026-07-27)**: 접근 데모 전 구간 비격리(cmdline `skew_tick=1`만), Lost 0·지터 이상 무. **구현(`a6e2097`)**: cfg `[TASKn] CPU=` 키(파서+`InitRTTasks` pin, 미지정=-1=기존 CPU0) — TASK0/1(1 kHz 페어)만 CPU3, 키보드/터미널/로거는 CPU0 잔류. gate0에 cpu 인자. **비격리 베이스라인(파이프라인 부하, 20 s)**: CPU3 avg 1.0/max 33.9 µs, CPU0 avg 1.2/**max 104 µs**. cmdline 전환은 `/etc/default/flash-kernel` → `"skew_tick=1 isolcpus=3 nohz_full=3 rcu_nocbs=3 irqaffinity=0-2"`(+`flash-kernel`+재부팅; 커널 NO_HZ_FULL=y·RCU_NOCB=y 확인, 비전 ~1.8코어라 0-2 3코어 충분 — 7/9의 2+2 실패와 다름). GEM IRQ의 CPU3 이전 여부는 격리 후 실측으로. **재부팅+격리 A/B 대기** |
+| D10 | 3+1 코어 격리 = 보류였다가 → **착수(2026-07-27 밤, 오퍼레이터 지시 — 그리퍼 대기 중 인프라 작업)** | RT-POSIX가 전 태스크를 CPU0에 기본 pin(`posix_rt.c:257`) → isolcpus만으론 무효, 앱 pin 코드와 한 세트. **실증 확인(2026-07-27)**: 접근 데모 전 구간 비격리(cmdline `skew_tick=1`만), Lost 0·지터 이상 무. **구현(`a6e2097`)**: cfg `[TASKn] CPU=` 키(파서+`InitRTTasks` pin, 미지정=-1=기존 CPU0) — TASK0/1(1 kHz 페어)만 CPU3, 키보드/터미널/로거는 CPU0 잔류. gate0에 cpu 인자. **비격리 베이스라인(파이프라인 부하, 20 s)**: CPU3 avg 1.0/max 33.9 µs, CPU0 avg 1.2/**max 104 µs**. cmdline 전환은 `/etc/default/flash-kernel` → `"skew_tick=1 isolcpus=3 nohz_full=3 rcu_nocbs=3 irqaffinity=0-2"`(+`flash-kernel`+재부팅; 커널 NO_HZ_FULL=y·RCU_NOCB=y 확인, 비전 ~1.8코어라 0-2 3코어 충분 — 7/9의 2+2 실패와 다름). GEM IRQ의 CPU3 이전 여부는 격리 후 실측으로. **재부팅+격리 A/B 대기** |
 | D11 | 캘리브 이미지 = **파이프라인 토픽에서 캡처** | librealsense 직접 열기 금지(충돌). intrinsics도 camera_info에서 → `save_camera_params` 불필요 |
 | D12 | 캘리브 체인 = **ViSP 완전 배제, 태그 pose는 OpenCV로** (2026-07-26) | `visp-compute-apriltag-poses`는 x86-64 바이너리+소스 미포함+원저자 홈 rpath → 어디서도 실행 불가. `cv2.aruco`(APRILTAG_36h11)+`solvePnP`로 동일 YAML 산출. intrinsic은 공장값(camera_info) 1순위 — 파이프라인 3D와 같은 카메라 모델이어야 rMc 정합(불일치가 rMc에 흡수되는 계통오차 방지). 원저자 camera.xml은 640×480이라 어차피 재사용 불가(우린 848×480). 잔차 불량 시에만 `cv2.calibrateCamera` 재캘리브로 escalation |
 | D13 | 접근 IK 시딩 = **init 계산 q_ready 고정 시드 + 자동 분기** (2026-07-27, 오퍼레이터 선택) | 근본 원인: RBDL IK는 local 반복법이라 **시드가 유일한 브랜치 선택 장치**인데 시드=현재 자세였음 → 성공이 "오퍼레이터가 팔을 어디 놔뒀나"에 종속(시도마다 자세도 상이). 시드는 계산상 출발점일 뿐 물리 자세와 분리 가능 → init에서 워크스페이스 박스 중심을 풀어 q_ready 산출·코너 8점 검증, 매 접근을 q_ready(+그 자세의 soft-R)에서 해석 = **같은 목표, 같은 해**. 이동 정책(사용자 선택지 4개 중): **자동 분기** — Δq≤2.0 직행, 초과 시 q_ready 경유 자동 스테이징. 대안 검토: 해석적 IK(브랜치 전수 열거)가 근본 치료지만 기계변환 URDF의 프레임 뒤틀림(E16)이라 수식 유도 고위험 → 백로그 |
@@ -405,32 +405,32 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 
 ## 9. 남은 것
 
-- ~~위치 정확도 개선~~ **완료(2026-07-27)**: refine으로 **10.9 mm** — §5 표, `0668ed2`
-- ~~Phase 5-1~5-4~~ **완료(2026-07-27)**: 캘리브 → rMc → TF/박스 정본화 → apple 실좌표 검증
+- 위치 정확도 개선 — **완료(2026-07-27)**: refine으로 **10.9 mm** — §5 표, `0668ed2`
+- Phase 5-1~5-4 — **완료(2026-07-27)**: 캘리브 → rMc → TF/박스 정본화 → apple 실좌표 검증
   → **접근 데모 전 클래스 성공**(접근→'b' homing→다음 사이클) — §5 표,
   `8093e8a`/`a9644dc`/`61a4a86`. E13 사고·픽스 포함. 물리 검증 완료: 테이블-베이스 높이차
   ~10 cm(depth +0.096 일치), apple 수평거리 85 cm(계산 0.847 일치)
-- ~~grav-comp 보완~~ **완료(2026-07-27)**: F/T 285 g URDF(−X 축, E16) + sticky-float
+- grav-comp 보완 — **완료(2026-07-27)**: F/T 285 g URDF(−X 축, E16) + sticky-float
   속도게이트판 오퍼레이터 OK — §5 표. 잔류: 전방 뻗은 자세 미세 sag(모델 바닥, sticky가
   완충 — 필요 시 HOLD_KP_FRAC/DB 상향 나사만)
-- ~~접근 IK 모드 검토~~ **결론(2026-07-27, D13)**: task-space servo 1차 시도는 손목 감김
+- 접근 IK 모드 검토 — **결론(2026-07-27, D13)**: task-space servo 1차 시도는 손목 감김
   사고로 리버트(E17, 전제조건 3종 명문화 후에만 재시도) → **ready-seed IK 채택**(`19b15ba`,
   자동 스테이징이 경유점 스테이징 아이디어를 흡수). REFUSED→home→재시도 수동 레시피의
   자동화도 이 안에 포함됨
-- ~~ready-seed 실기 검증~~ **v3 확인(2026-07-27 20시)**: [operator anchor] 부팅·괴랄 궤적
+- ready-seed 실기 검증 — **v3 확인(2026-07-27 20시)**: [operator anchor] 부팅·괴랄 궤적
   소멸·전 접근 직행 FK 9.6~11.9 mm — 스테이징 레그·취소 키는 아직 실기 미조우(전부 직행)
-- ~~E21 복구~~ **완료(2026-07-27 21시대)**: 베이스 고정 → 프로브 강체 fit → launch TF 보정
+- E21 복구 — **완료(2026-07-27 21시대)**: 베이스 고정 → 프로브 강체 fit → launch TF 보정
   → 전 5클래스 접근 재검증(§7 E21/E22/E23)
-- ~~E25 w 사다리 / E26 refine 진동~~ **완료(2026-07-28, `9aca402`)** — §7 E25/E26.
+- E25 w 사다리 / E26 refine 진동 — **완료(2026-07-28, `9aca402`)** — §7 E25/E26.
   refine 14 pass → 5 pass, tennis 실패 → 1 pass 9.4 mm. 잔차 5.8~9.4 mm는 stiction 바닥
-- ~~park 자세와 IK 시드 분리~~ **불필요로 결론(2026-07-28)**: "좋은 시드는 작업공간 근처,
+- park 자세와 IK 시드 분리 — **불필요로 결론(2026-07-28)**: "좋은 시드는 작업공간 근처,
   좋은 park는 시야 밖이라 구조적으로 상충한다"는 가정이 실측으로 반증됐다. **시드는 계산의
   출발점일 뿐 물리적으로 목표 근처일 필요가 없고**(올바른 IK 브랜치만 고르면 됨), 16:34에
   기록한 앵커 `q=[0.47,−0.41,−2.14,0.17,0.73,−0.56]`는 **팔꿈치를 접어 카메라 시야 밖에
   있으면서** 5클래스를 전부 첫 단에 풀었다. 상태와 키를 하나 더 만들 이유가 없음. 다만
   **결합 자체는 잠재 함정**으로 남는다 — 나중에 시야를 가리는 자세로 HOME을 기록하면 같은
   불편을 겪는다(해법: 시야 밖 + 좋은 브랜치를 동시에 만족하는 자세가 존재한다는 것이 위 증거)
-- ~~reach map 툴~~ **완료(2026-07-28 18시대, `a0a2c26`)**: `tools/reachmap.cpp` +
+- reach map 툴 — **완료(2026-07-28 18시대, `a0a2c26`)**: `tools/reachmap.cpp` +
   `tools/reachmap_plot.py`. **설계상 가장 중요한 결정 — 솔버를 재구현하지 않고
   `FullDynControllerRT.o`를 그대로 링크한다.** 사다리·warm-start·폴딩·브랜치·tilt 로직을
   두 벌로 가지면 드리프트가 생기고, **로봇과 다른 말을 하는 지도는 없느니만 못하다**.
@@ -448,7 +448,7 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   같은 스윕을 돌리면 **"어느 HOME 자세가 박스를 가장 넓게 덮나"를 계산으로 고를 수 있다**
   (지금까지는 사람이 팔을 놓아보고 n/8을 읽는 방식). 후보 시드는 `~/.indy7_ready_seed.*`
   백업들 + 새로 기록할 몇 개
-- ~~다중 시드 IK~~ **완료·실기 검증·병합(2026-07-29, RAON `2e911a3`)** — §7 **E30**. 브랜치 플립
+- 다중 시드 IK — **완료·실기 검증·병합(2026-07-29, RAON `2e911a3`)** — §7 **E30**. 브랜치 플립
   거부가 박스에서 사실상 소멸(1,345 → 14셀), 커버율 95.1 → 99.4%. **효과의 89%는 시드 팬아웃이
   아니라 warm-start를 건너뛴 solve 한 번**이었다는 점이 이 작업의 실질 교훈
 - **다음(즉시) ①: IK를 RT 스레드 밖으로** — 사다리가 최대 **56 ms**를 1 kHz 루프 안에서 쓴다
@@ -471,7 +471,7 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   방어선 `CheckLimitsPhysical`(±175°/±215°)이 모든 IK 해를 검사하고, 한계 안 두 자세를 잇는
   관절공간 궤적은 중간에도 한계를 못 벗어난다(박스 제약=볼록). 뚫린 곳은 그 검사를 거치지 않고
   위치를 직접 명령하는 경로뿐인데 = E17 task-space servo(J5 9.39 rad 감김)이고 이미 리버트됨
-- ~~접근 정확도 그래프~~ **완료(2026-07-29)**: 접근이 끝날 때마다 **목표 좌표 vs 실제 TCP**를
+- 접근 정확도 그래프 — **완료(2026-07-29)**: 접근이 끝날 때마다 **목표 좌표 vs 실제 TCP**를
   자동 기록·작도. 앱은 `App/Indy7/approach_results/approach_log.csv`에 **행 하나만 append**하고
   (RT 밖 워커 스레드), `tools/approach_plot.py` 워처가 `plots/approach_NNN_<class>.png` +
   `approach_latest.png` + 누적 `approach_history.png`를 만든다. `run.sh`가 워처를 자동
@@ -509,7 +509,7 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   `IK_POS_TOL_M 2 mm`는 **사고 한 건을 막으려 고른 값이지 최적화된 값이 아니다**(60°는
   "원거리 41~48°가 실제로 되더라"는 데이터 몇 점 위에 여유를 얹은 것). 재조정할 일이 생기면
   이 차이를 기억할 것
-- ~~접근 궤적 자동 기록·3계열 그래프~~ **구현 완료(2026-07-30, RAON `592998e`) — 실기 최종 확인 대기**:
+- 접근 궤적 자동 기록·3계열 그래프 — **구현 완료(2026-07-30, RAON `592998e`) — 실기 최종 확인 대기**:
   접근마다 **DataLog 1파일 = 접근 1회**가 자동 생성되고, 워처가 `approach_NNN_<class>_traj.png`
   (3D 경로 + **시작점 기준 변위 |P(t)−P0| 1패널** + 목표거리 패널; X/Y/Z 3패널은 07-30
   사용자 요청으로 변위 1패널에 병합, RAON `bd01c6d` · **one-shot plan 곡선** 추가 `0550e47`+`9606588` —
@@ -529,7 +529,7 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   `tools/traj_plot_selfcheck.py`(합성 접근: droop 37 mm·0.65 재조준·IK 잔차 2 mm를 plot_traj에 직접
   주입)로 대체, 기하 검증: X-○ 1.6 mm 포개짐·`+` 24 mm 분리·final miss 8.1 mm=제목 일치.
   **실기 검증 완료(2026-07-30 저녁)**: 접근 23건+ 그래프 자동 생성, 실데이터 교차검증 배지 0.002 mm.
-- ~~접근 정밀화(원샷 도달)~~ **완료(2026-07-31) → §9.5 참조**: Kd vs Ki 분석,
+- 접근 정밀화(원샷 도달) — **완료(2026-07-31) → §9.5 참조**: Kd vs Ki 분석,
   마찰 FF(KF_3/KF_4), E32~E35, #24~58 실기 전 과정을 타임라인·표로 재구성해 이동
 - **파지 단계 준비**: TCP 재정의(현 원점은 태그면 안쪽 29 mm — 그리퍼 TCP로 이동, E16),
   <5 mm 정밀도(게인/적분 검토, refine 바닥 12 mm), top-down 고정 R, 물체 6D pose
@@ -766,7 +766,7 @@ DataLog CSV에 남는다.
   에지에서 둘 다 ~1 s 안에 찍히므로 배선 불필요. 워처 시그니처에 `rt_log_results` 포함
 - `plot_tcp_trajectory.py`(기존 궤적 그리기)는 **레이아웃만 계승** — 보드에서 실행 불가
   (pandas 없음·`plt.show()` 블로킹·세션 단위 대상)라 워처에 numpy+matplotlib로 이식
-- ~~앱 쪽 arm/close 프로토콜(트리거 엣지)·55 s 캡 실기 미검증~~ → 07-31 접근 30건+로
+- 앱 쪽 arm/close 프로토콜(트리거 엣지)·55 s 캡 — 당초 실기 미검증 항목 → 07-31 접근 30건+로
   자동 검증 완료. DataLog는 접근당 수 MB — `rt_log_results/` 주기 정리 필요
 
 ## 10. 재개 가이드 (새 세션용)
