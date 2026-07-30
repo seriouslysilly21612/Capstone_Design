@@ -675,6 +675,12 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   거의 전부 j2×레버 ~0.4 m 몫). **파지 <5 mm가 필요해지면 다음 지렛대 = KF_2**(elbow,
   τ2 여유 큼) + 일관 바이어스 보정(방향 재현성은 07-29 그래프 자동화 때 이미 확인).
   j5 leash 핀(0.15 rad, roll=위치 무관)은 파지 자세 단계 항목으로 유지.
+  **관찰(끝단 미세 흔들림, orange/apple/tennis만)**: 정체 = **감속 꼬리의 j3 lag 재축적 후
+  만회** — j3 대이동(0.5~1.1 rad) 물체만 감속 구간에서 lag가 53~97 mrad(3~6°)로 부풀었다
+  마지막 ~0.5 s에 FF+PD가 되감음(공구가 눈에 띄게 몇 도 스윙; banana/mustard는 j3 2~13 mrad라
+  안 보임). 헌팅 아님(부호 교차 0), gate 플리커 아님(1~9회), settle은 완전 정지(ref 정지 후
+  TCP 이동 0.0 mm), 과주 0, 최종 정확도 무영향 — **코스메틱, 대응 불요**(원인은 감속에서
+  속도↓·마찰 상대 우세 + inertia-scaled PD 저권한이라 근본책은 wrist 권한 구조 변경뿐).
 - **파지 단계 준비**: TCP 재정의(현 원점은 태그면 안쪽 29 mm — 그리퍼 TCP로 이동, E16),
   <5 mm 정밀도(게인/적분 검토, refine 바닥 12 mm), top-down 고정 R, 물체 6D pose
   estimation(나중 — 들어오면 soft-R 타깃만 물체 기준으로 교체)
