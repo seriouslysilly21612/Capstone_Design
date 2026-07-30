@@ -515,7 +515,14 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   사용자 요청으로 변위 1패널에 병합, RAON `bd01c6d` · **one-shot plan 곡선** 추가 `0550e47`+`9606588` —
   1차 pass의 reference를 끝점 고정 연장한 "원래 원했던 한 방 궤적", 새 계산 없이 로그에서 추출,
   3D 패널에도 파란 곡선+계획 끝점 X 마커로 표시;
-  pass-1 경계는 goal 스텝 크기 <80 mm 휴리스틱으로 refine 편향/staging leg-2를 구분)를 만든다. 3계열 = **IK 입력**(goal+refine
+  pass-1 경계는 goal 스텝 크기 <80 mm 휴리스틱으로 refine 편향/staging leg-2를 구분)를 만든다.
+  **원점 재정의(`a09f129`)**: 3D의 `+`는 bias 포함 **최종 조준점**이라 X와 안 겹치는 게 정상 —
+  ○(**원래 목표**=호버점, 첫 refine 편향 직전의 goal) 마커를 추가해 X가 ○ 위에 포개지는 것(≤2 mm,
+  IK Accept 잔차)이 정상 판독이 되게 함. **목표거리 패널도 원래 목표 기준으로 변경** — 이전엔 이동하는
+  편향 goal 기준이라 마지막 plateau가 제목의 final miss와 어긋났음(≈|bias−miss|); 이제 plateau=final
+  miss로 일치하고 12/5 mm 선이 문자 그대로 적용되며, 회색(|orig−ref|)이 1차 끝 ~0 → bias 거리에
+  주차하는 모양으로 **의도적 overshoot이 그대로 보임**. 합성 접근(droop 37 mm·0.65 재조준·잔차
+  2 mm)으로 기하 검증: X-○ 1.6 mm, `+` 24 mm 분리, plateau 8.1 mm=제목 일치. 3계열 = **IK 입력**(goal+refine
   편향 스텝) / **FK(q_ref)**(레퍼런스) / **FK(q_act)**(실측) — refine이 왜 2~3 pass 필요한지를
   그림 한 장으로 보여주는 도구(ref는 명령점에 도달, act는 못 미침 = CTC 무적분+stiction;
   편향 스텝이 ref를 goal 너머로 밀어 act를 goal에 얹는 과정이 수직 점선으로 표시).
