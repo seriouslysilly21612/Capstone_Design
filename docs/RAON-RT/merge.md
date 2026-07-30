@@ -584,7 +584,21 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   **1차 현장값: KF_3=5.0**(j3 breakaway 7.2~10.6의 ~70%, 일부러 미달 — FF는 돕기만, 스스로
   끌지 않게)만 켜고 접근 A/B. 기대: j3 이동 추종↑·leash 미발동·미스의 j3 성분 감소; 궤적 꼬리
   (q̇_ref→0)에선 FF도 소멸하므로 마지막 잔차는 여전히 refine 몫. j4는 중력과 얽혀 j3 결과 후 판단.
-- **E33 — FF 1차 실기(#34~39): 큰 이동 대성공, refine 미세 이동에서 leash-release 캐터펄트 발산
+- **E34 — 간헐 RT 스톨(E32 재발·#40 66%)의 진범 = IgH master 커널 스레드 경유 priority inversion
+  (2026-07-31 새벽 확정)**: 세션 지도 = 00:25 나쁨(27~29%)/00:44 좋음/01:14 좋음(#34~39 전부 0%)/
+  01:35 나쁨(66%) — 빌드·cfg·Kd·KF와 무관한 "재시작 복불복"이 아니라 **세션 중 배경 부하 복불복**.
+  증거 사슬: ① 153 ms 갭에도 SM watchdog 무발동 = EtherCAT 태스크는 계속 돎(=TASK0이 spin이 아니라
+  **blocking**) ② cyclictest CPU3 1 kHz 20 s **max 178 µs**(load 6 상태에서!) = 커널/격리/CPU3 무결
+  ③ eth0 에러 0, UVC 만성(무관), 클럭 MONOTONIC, mlockall 정상(run.sh 가드), 앱 내 fork 없음
+  ④ **IgH: master 락 = `struct semaphore`(master.h:198, PREEMPT_RT에서 PI 없음) + master 스레드
+  EtherCAT-OP/IDLE = SCHED_NORMAL nice 0(master.c:1681, 실측 TS/CPU0)**. 메커니즘: 부하 높으면
+  (비전 재시작 워밍업 00:24/00:43/01:33 + 빌드 + VSCode/에이전트) TS인 master 스레드가 semaphore를
+  쥔 채 CFS 대기 → 앱 TASK1의 매 사이클 ioctl이 그 semaphore에서 대기(상속 없음=무한 역전) →
+  TASK0 연쇄 → 2~20 ms 구멍이 세션 내내(66%까지). 궤적은 실행 사이클로 흘러 4배 슬로모션+스터터.
+  **왜 이제서야**: 이전 세션들은 보드가 조용했음 — 07-30 20:32 첫 로그 7.3% 갭이 미니어처 전조.
+  **처방**: ① 앱 시작 후 `sudo chrt -f -p 40 $(pgrep -x EtherCAT-OP)` (OP 스레드는 앱마다 재생성되므로
+  세션마다; IDLE도 무해) ② 실기 세션 중 보드에서 빌드/무거운 분석 금지(운영 수칙) ③ 장기적으론 IgH
+  master 스레드 FIFO화 패치/재빌드 옵션. **#40 데이터는 FF-gate 판정에 사용 금지** — 재실험 필요.
   → 스코프 게이트로 해결(`9ba929d`)**: 큰 이동은 극적 개선(tennis first 9.97 mm·refine 0회 역대
   최고, apple 20 vs 50 mm) — 그러나 #34/38/39는 refine 6회 상한 소진 후 **final이 first보다 악화**
   (73/59/73 mm), 육안으론 "마지막에 좌우 왕복". 메커니즘: 첫 이동이 leash(0.15 rad)에 물린 채 끝나면
