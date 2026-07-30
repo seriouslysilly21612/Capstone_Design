@@ -584,6 +584,17 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   **1차 현장값: KF_3=5.0**(j3 breakaway 7.2~10.6의 ~70%, 일부러 미달 — FF는 돕기만, 스스로
   끌지 않게)만 켜고 접근 A/B. 기대: j3 이동 추종↑·leash 미발동·미스의 j3 성분 감소; 궤적 꼬리
   (q̇_ref→0)에선 FF도 소멸하므로 마지막 잔차는 여전히 refine 몫. j4는 중력과 얽혀 j3 결과 후 판단.
+- **E33 — FF 1차 실기(#34~39): 큰 이동 대성공, refine 미세 이동에서 leash-release 캐터펄트 발산
+  → 스코프 게이트로 해결(`9ba929d`)**: 큰 이동은 극적 개선(tennis first 9.97 mm·refine 0회 역대
+  최고, apple 20 vs 50 mm) — 그러나 #34/38/39는 refine 6회 상한 소진 후 **final이 first보다 악화**
+  (73/59/73 mm), 육안으론 "마지막에 좌우 왕복". 메커니즘: 첫 이동이 leash(0.15 rad)에 물린 채 끝나면
+  다음 미세 이동에서 FF가 정적마찰을 무너뜨리는 순간 갇혀 있던 관절이 풀리며 **느리고 짧은 reference를
+  추월해 반대편 leash까지 관통**(j3가 매 pass "명령+0.30 rad"=2×0.15 이동, goal_dy 부호 완벽 교대
+  −28/+39/−38/+46/−42/+44 mm). 성공/실패의 분기 = 첫 이동이 leash 없이 끝났는가(#36 lead −0.018 →
+  ×0.7 정상 수렴). **수정**: `SetTargetPosePositionOnly`에 per-trajectory `adKfScale`(기본 1.0=불변)
+  추가, refine 사다리만 0.0 전달 — "FF는 총이동(gross transport) 전용, 정밀 위치잡기는 검증된
+  PD+refine 체제로". 빌드 완료·실기 대기. 부수 관찰: 풀린 관절이 저속 ref를 추월했다는 것 자체가
+  **운동마찰 ≪ 정적마찰**의 실증 — KF를 breakaway까지 올리면 큰 이동 꼬리에서도 위험, 5.0 유지.
   **첫 실기 판독 성과 — settle leash 발견**: banana #23에서 one-shot plan 끝의 "+6.4 mm 상승"을
   DataLog로 추적 → pass-1 계획은 t=2.97에 목표 0.00 mm 도달, 궤적 시간 종료 순간 `MAX_REF_LEAD
   0.15 rad`(FullDynControllerRT.cpp:1417, 궤적 종료 후 reference가 실측보다 0.15 rad 이상 앞서지
