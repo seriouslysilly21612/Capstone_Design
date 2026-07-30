@@ -294,6 +294,7 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 | `App/Indy7/Makefile` | ViSP/librealsense/OpenCV/PCL 제거, `RBDL_DIR` override 추가 · **Gate 2b**: humble+my_interfaces 배선(E5의 include **화이트리스트** 방식), rpath 내장(ROS env source 불필요), `make gate2b_test` 타깃 |
 | `App/Indy7/ROS2PickBridge.{h,cpp}` | **신규(Gate 2b)** — `/pick_target_base`·`/detections` 구독 + `AsyncParametersClient`로 `desired_class` LIVE 설정. 스레딩 계약: ROS2 I/O·메뉴·통계게이트는 브릿지 자체 non-RT 스레드(spin+worker), RT는 wait-free 원자 API+SPSC goal 슬롯만. `SignalHandlerOptions::None`(앱 SIGINT 보존). 게이트: N=15, 축별 std<8 mm, 워크스페이스 박스 실측치+**radial 게이트 r≤0.80**, z마진 0.15 m · E14 세션 위생(lock 방송 세션화·lost 1 s 디바운스·desired_class 자동 초기화) · 메뉴 HOME 기록 항목 · 박스 상수 public(ready-seed 프로브 파생용) · **접근 리포트 메일박스**(2026-07-29, `ApproachReport`/`LogApproach`/`TickApproachLog`) — seed-persist와 동일 SPSC 계약, RT는 POD 채우고 반환·워커가 시각 스탬프+CSV append. 슬롯 점유 중 재요청은 **드롭**(RT 블로킹 금지) |
 | `tools/approach_plot.py` | **신규(2026-07-29)** — 접근 정확도 그래프 자동 생성. `approach_log.csv`를 폴링해 접근 1회당 PNG 1장과 누적 `approach_history.png`. 구성: **① 3D 목표-vs-도달**(원점=목표, 5/12 mm 허용 구, ±15 mm로 확대) **② 실척 측면도**(물체·호버 150 mm·도달을 축척 그대로 — 3D 패널엔 물체를 못 넣는다, 10배 축소하면 mm가 사라지므로) **③ 축별 막대 ④ 숫자 패널**. **앱이 직접 그리지 않는 이유**: `mlockall` + 1 kHz RT 프로세스에서 `fork()`는 전 쓰기페이지를 COW로 표시해 **RT 스레드의 다음 쓰기가 폴트**를 먹는다 → 별도 프로세스 폴링. `run.sh`가 `--watch --exit-with-parent`로 자동 기동(`exec`이 셸을 앱으로 치환하므로 워처의 부모 = 앱 → 앱 종료시 자동 회수). `INDY7_NO_PLOT=1`로 끔. matplotlib+numpy만 사용(pandas 보드에 없음), 라벨 전부 영문(한글 폰트 부재) |
+| `tools/fk_replay.cpp` | **신규(2026-07-30)** — DataLog(관절 로그) → task-space 변환기. `q_ref`/`q`를 **로봇과 같은 `FullDynControllerRT.o`를 링크한 `ToolPosAt()`**(신설, `ToolRotAt` 미러)으로 FK → `ref_*`/`act_fk_*` 6열 append. `act_fk_*`는 RT가 기록한 `tcp_*`와의 **상시 교차검증용**(실기 24k행에서 max **0.002 mm** = CSV 반올림 잡음). `make fk_replay` |
 | `tools/gate2b_bridge_test.cpp` | 브릿지 단독 하네스(EtherCAT/로봇 불필요) — stdin 명령 p/숫자/v/q, RT 소비자 대역 poller |
 | `tools/test_gate2b_bridge.py` | 합성 검증 드라이버 — 실브릿지+실 pick_logic 노드 vs 합성 `/detections`·`/pick_target_base` 피더. C1 메뉴 / C2 param ack / C3 `ros2 param get` 실증 / C4 lock / C5 게이트 통과 goal(z=0.27). E1~E3 방어 패턴 이식 |
 | `tools/test_phase3_smoke.py` | **Phase 3 정본 스크립트** — P0 preflight(rtprio/memlock/슬레이브/중복실행) → P1 파이프라인 기능적 대기 → P2 앱+OP → P3 홀드(`--hold N`, E9 규칙) → P4 in-app 'p'/선택/'v' → P5 축별 SDO → P6 SIGINT DeInit 검증. `--app-only` 격리 스테이지. 앱 실행에 `MALLOC_ARENA_MAX=2`+`stdbuf -oL` |
@@ -508,6 +509,24 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
   `IK_POS_TOL_M 2 mm`는 **사고 한 건을 막으려 고른 값이지 최적화된 값이 아니다**(60°는
   "원거리 41~48°가 실제로 되더라"는 데이터 몇 점 위에 여유를 얹은 것). 재조정할 일이 생기면
   이 차이를 기억할 것
+- ~~접근 궤적 자동 기록·3계열 그래프~~ **구현 완료(2026-07-30, RAON `592998e`) — 실기 최종 확인 대기**:
+  접근마다 **DataLog 1파일 = 접근 1회**가 자동 생성되고, 워처가 `approach_NNN_<class>_traj.png`
+  (3D 경로 + X/Y/Z(t) 3계열 + 목표거리 패널)를 만든다. 3계열 = **IK 입력**(goal+refine 편향
+  스텝) / **FK(q_ref)**(레퍼런스) / **FK(q_act)**(실측) — refine이 왜 2~3 pass 필요한지를
+  그림 한 장으로 보여주는 도구(ref는 명령점에 도달, act는 못 미침 = CTC 무적분+stiction;
+  편향 스텝이 ref를 goal 너머로 밀어 act를 goal에 얹는 과정이 수직 점선으로 표시).
+  - **RT 비용 신규 0**: 접근이 **기존 'l'/'a'/RECT 로깅 블록**(FK 1회+락프리 링 push, 실기
+    1 kHz 검증 완료)을 켜는 것뿐. 엣지에서 atomic 스토어 2회 추가가 전부. 파일 IO는 prio 30
+    Logger 태스크, FK 재계산·작도는 별도 오프라인 프로세스
+  - **로거 윈도우 변경**: 고정 24 s → 접근은 `m_bLogUntilDone`으로 **완료 에지까지**(실기
+    접근 간격 ~15 s라 고정창이면 두 접근이 한 파일에 섞임). 수동 'l'은 24 s 유지. 플래그는
+    `exchange()` 소비 + idle-trigger 가드로 다음 로그 오염 차단. 중단 접근도 파일은 닫힘
+  - **짝 맞추기 = 시각 근접**(DataLog 스탬프 ↔ row unix_s, 15 s 창, 파일당 1회) — 완료
+    에지에서 둘 다 ~1 s 안에 찍히므로 배선 불필요. 워처 시그니처에 `rt_log_results` 포함
+  - `plot_tcp_trajectory.py`(기존 궤적 그리기)는 **레이아웃만 계승** — 보드에서 실행 불가
+    (pandas 없음·`plt.show()` 블로킹·세션 단위 대상)라 워처에 numpy+matplotlib로 이식
+  - ⚠️ 실기 미검증 항목: 앱 쪽 arm/close 프로토콜(트리거 엣지)·55 s 캡. 다음 실기 세션에서
+    접근 1회면 자동 확인됨. DataLog는 접근당 수 MB — `rt_log_results/` 주기 정리 필요
 - **파지 단계 준비**: TCP 재정의(현 원점은 태그면 안쪽 29 mm — 그리퍼 TCP로 이동, E16),
   <5 mm 정밀도(게인/적분 검토, refine 바닥 12 mm), top-down 고정 R, 물체 6D pose
   estimation(나중 — 들어오면 soft-R 타깃만 물체 기준으로 교체)
