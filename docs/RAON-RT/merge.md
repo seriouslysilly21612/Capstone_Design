@@ -287,6 +287,7 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
 | 파일 | 변경 |
 |---|---|
 | `App/Indy7/Indy7Ctrl.{h,cpp}` | VisualServo 완전 제거(멤버·TASK5·구 'v'키·RT루프 주입블록·proc), `SetAsDCRef(slave0)` 가드콜 추가, calib 출력 경로 `App/CalibUtils/kv260/` · **Gate 2b**: 브릿지 수명주기(Init 비치명 실패 허용/DeInit), 'p'/숫자/'v' 키 핸들러(원자플래그만), RT 루프 goal 소비 SM('n'키 검증 시퀀스 재사용, ISO/RECT 상호배제·이동중 재트리거 금지) · **refine SM**(감쇠 편향+속도게이트, oriWeight=0) · **HOME**('p' 기록+'b' 복귀) · **서보-오프 goal 폐기 가드**(E15) · **ready-seed 접근**(`TryReadyApproach` 직행/스테이징 + `eAPPROACH_STAGING` 레그2: 모드·서보 불변시에만 발화) · init에서 박스 코너 프로브로 `ComputeReadySeed` 호출 · **접근 정확도 리포트**(2026-07-29, `EmitApproachReport`) — `eAPPROACH_MOVING→IDLE` 에지에서 1회, 목표(`m_vRefineDesired`) vs FK TCP + **refine 직전 TCP**(`m_vFirstTcp`, 첫 정착에서 캡처)를 브릿지 메일박스로. RT 경로라 `strncpy`(printf 계열 회피) |
+| `App/Indy7/Indy7Ctrl.{h,cpp}` (키) | **캘리브 캡처 게이트(2026-07-29)** — `s`가 진단 출력처럼 보이면서 hand-eye 데이터셋을 무조건 덮어쓰던 것(원저자 `d38e9ec` 유래)을 `m_bCalibMode` 뒤로 가둠. `w`/`W`로 토글, **매 실행 OFF**. 쓰기 호출부는 `case 's'`의 2줄뿐이라 가드 하나로 완결(전 저장소 grep 확인). 배너는 `DoInput`이 **1 kHz RT 스레드**라 printf 1회로 합침 — 파일 IO가 RT 스레드에 있는 건 원래부터이고, 이 변경으로 기본 경로에서는 사라짐. ⚠️ `w`가 유일한 자유 알파벳이었다(`q`·`z`는 `proc_keyboard_control`이 선점) |
 | `App/Indy7/CalibCapture.{h,cpp}` | **ViSP-free 재작성** — Eigen `AngleAxisd`로 theta-u 변환, `vpPoseVector::saveYAML` 포맷 호환(→ `eye_to_hand_calib.py` 무수정 소비) |
 | `App/Indy7/FullDynControllerRT.{h,cpp}` | x86 SSE 헤더 `__SSE__` 가드 (aarch64 빌드 차단 해소) · **E13 3중 방어**(soft-R IK·Δq 게이트·T 스케일링, FK 잔차 합격판정) · `IsTrajectoryRefDone()`(B7) · **sticky-float 홀드**(dead-band 앵커+속도게이트, 'k') · **ready-seed IK**(`ComputeReadySeed`/`SolveReadyIK`/2π 폴딩+관절한계/`ScaledTrajTime`, D13) |
 | `App/Indy7/indy7.urdf` | tcp 링크에 F/T 페이로드 **285 g @ CoM (−0.021,0,0)** — 공구축이 tcp 프레임 **−X**라는 경고 주석 포함(E16) |
@@ -543,9 +544,21 @@ make RBDL_DIR=~/rbdl-stage/usr/local ECAT_INCLUDE=../../include/EMasterApp ECAT_
      `approach_history.png`), 원본 = `approach_results/approach_log.csv`(앱 실행 간 누적).
      끄려면 `INDY7_NO_PLOT=1 ./run.sh`. 수동 재작도 = `python3 tools/approach_plot.py --all`.
      ⚠️ 그래프의 원점은 **물체가 아니라 호버 지점**(물체 z + 0.15 m) — E31.
-   - ⚠️ `s`(TCP pose 출력)는 `App/CalibUtils/kv260/robot_poses.csv`와 `pose_rPe_*.yaml`을
-     **덮어쓴다**(캘리브 세트 파괴). 진단용으로 눌렀으면 곧바로
-     `git checkout -- App/CalibUtils/kv260/`로 복원할 것.
+   - **`s`는 이제 기본이 출력 전용이다(2026-07-29부터, `w` 게이트)**. 예전에는 `s`가
+     `App/CalibUtils/kv260/robot_poses.csv`와 `pose_rPe_*.yaml`을 **무조건 덮어썼고**
+     (매 실행 첫 `s`는 csv를 **truncate**), 그게 진단용 출력처럼 보였다. 지금은:
+     - 평상시 `s` → `[TCP Pose] (print only — 'w' arms capture)`, **파일 무접촉**
+     - `w` → 배너와 함께 캡처 무장(다음 N 표시), 이때 `s`가 `*** CAPTURED ***`로 기록
+     - `w` 다시 → 해제. **매 실행 OFF로 시작**한다
+     - 사고 시 복원은 그대로 `git checkout -- App/CalibUtils/kv260/`
+     ⚠️ **정식 캘리브 세션에서는 `w`를 먼저 눌러야 한다** — 잊으면 이미지 16장에
+     pose 0개로 끝난다(데이터가 틀리는 게 아니라 없으므로 안전한 실패, 재실행하면 됨).
+     `tools/calib_grab.py`가 매 컷마다 `*** CAPTURED ***` 확인을 요구한다.
+   - ⚠️ **새 키를 추가할 때 `proc_keyboard_control`을 먼저 볼 것.** 이 스레드가
+     `q`(→`StopTasks()`, 그래서 `q`는 **종료가 맞다** — 다만 `DeInit`을 안 탄다)와
+     `z`/`Z`(→ISO 큐브 IK 검증)를 **`m_cKeyPress`를 설정하지 않고 소비**한다. 따라서
+     `DoInput`에 그 두 키의 `case`를 써도 **도달하지 않는다** — 실제로 `case 'q'`(ISO
+     큐브 하드웨어 테스트)는 그렇게 죽어 있다. `w`가 유일하게 남은 자유 알파벳이었다.
    - **★ 6/8 앵커 시드 보존(2026-07-28 03:41:51 기록)**: `q = [0.26, −0.90, −0.87, −0.14, 0.15, −0.56]`
      rad — 커버리지 **6/8**(미달 2점은 z=0.50 최상단 코너 (0.30,0.63,0.50)·(0.76,0.51,0.50)로
      실제 물체와 무관). 이후 다른 자세 실험으로 `~/.indy7_ready_seed`가 덮어써졌으므로
