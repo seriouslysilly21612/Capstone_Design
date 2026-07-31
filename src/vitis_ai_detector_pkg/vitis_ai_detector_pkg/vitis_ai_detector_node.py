@@ -806,16 +806,25 @@ class VitisAiDetectorNode(Node):
         directory = os.path.dirname(self.yield_csv_path)
         if directory:
             os.makedirs(directory, exist_ok=True)
-        with open(self.yield_csv_path, "w", newline="", encoding="utf-8") as f:
+        # atomic (temp + replace) — same second-signal rationale as the perf CSV
+        tmp_path = self.yield_csv_path + ".tmp"
+        with open(tmp_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=list(row.keys()))
             writer.writeheader()
             writer.writerow(row)
+        os.replace(tmp_path, self.yield_csv_path)
         self.get_logger().info(
             f"Saved detector yield summary to {self.yield_csv_path}"
         )
 
     def save_metrics_csv(self):
         if not self.metrics_csv_path or not self.metrics_rows:
+            return
+        # Window closed and already on disk -> shutdown re-save would rewrite
+        # identical bytes; skip so a mid-shutdown signal can't hurt anything.
+        if self.metrics_window_closed and (
+            getattr(self, "_metrics_saved_rows", -1) == len(self.metrics_rows)
+        ):
             return
         # Derive columns from the actual row (which now also carries
         # capture_sec/capture_nanosec/detect_period_ms) so the header can never
@@ -826,12 +835,17 @@ class VitisAiDetectorNode(Node):
             directory = os.path.dirname(self.metrics_csv_path)
             if directory:
                 os.makedirs(directory, exist_ok=True)
-            with open(
-                self.metrics_csv_path, "w", newline="", encoding="utf-8"
-            ) as f:
+            # Atomic write (temp + os.replace): shutdown runs this in `finally`
+            # while a second SIGINT can still arrive (group Ctrl-C + launch's
+            # own propagation). A plain "w" rewrite interrupted mid-write
+            # TRUNCATES the CSV (observed 2026-07-31: 3853 -> 611 rows).
+            tmp_path = self.metrics_csv_path + ".tmp"
+            with open(tmp_path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(self.metrics_rows)
+            os.replace(tmp_path, self.metrics_csv_path)
+            self._metrics_saved_rows = len(self.metrics_rows)
             self.get_logger().info(
                 f"Saved {len(self.metrics_rows)} metric rows to "
                 f"{self.metrics_csv_path}"
@@ -857,6 +871,12 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        # Shield the shutdown writes from a SECOND signal: a terminal Ctrl-C
+        # reaches the whole process group AND launch propagates its own SIGINT,
+        # so a KeyboardInterrupt used to land inside this very block and abort
+        # the CSV rewrite mid-write (2026-07-31 truncation incident).
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         if node is not None:
             node.stop_pipeline()
             node.save_metrics_csv()

@@ -1,0 +1,30 @@
+pick_target_3d_node:
+  ros__parameters:
+    pick_target_topic: /pick_target
+
+    # A/B 실험용 (2026-07-30): SDK full-frame alignment 를 쓰는 경로.
+    # target_3d.yaml(프로덕션)과의 차이:
+    #   - use_aligned_depth: false -> true   (epipolar 역투영을 건너뛴다)
+    #   - depth_topic / depth_info_topic 이 aligned_depth_to_color 쌍을 가리킴
+    # 카메라 쪽 짝: realsense_aligned_15fps.yaml (align_depth.enable: true)
+    #
+    # aligned depth 는 이미 color frame 에 정합돼 있으므로
+    #   * bbox 중심 color 픽셀이 곧 depth 픽셀 (탐색 불필요)
+    #   * deprojection 은 COLOR intrinsics 로 (노드가 자동 처리)
+    #   * 결과 3D 점은 camera_color_optical_frame (header 가 그대로 따라감)
+    # => extrinsics 토픽은 필요 없지만, 구독해도 무해하므로 그대로 둔다.
+    use_aligned_depth: true
+    depth_topic: /camera/camera/aligned_depth_to_color/image_raw
+    depth_info_topic: /camera/camera/aligned_depth_to_color/camera_info
+    color_info_topic: /camera/camera/color/camera_info
+    extrinsics_topic: /camera/camera/extrinsics/depth_to_color
+    output_topic: /pick_target_3d
+
+    # 아래는 전부 프로덕션 target_3d.yaml 과 동일하게 유지 (변수 고정)
+    depth_scale_16uc1: 0.001
+    patch_radius: 4
+    min_depth_m: 0.19
+    max_depth_m: 1.6
+    log_period_sec: 1.0
+    # aligned 모드에선 epipolar 탐색 자체를 안 하므로 A/B 체크는 의미 없음
+    epipolar_ab_check: false

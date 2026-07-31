@@ -336,6 +336,10 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        # 2차 시그널 차단: 그룹 Ctrl-C + launch 자체 전파로 SIGINT가 한 번 더
+        # 들어와 finally 안의 CSV 재저장을 도중 절단시켰다(2026-07-31 실증).
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         node.metrics.save()
         node.write_yield_summary()
         node.destroy_node()

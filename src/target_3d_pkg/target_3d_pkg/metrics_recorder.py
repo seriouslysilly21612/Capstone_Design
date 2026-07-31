@@ -52,6 +52,7 @@ class MetricsRecorder:
         self._start_ns = None
         self._closed = False
         self._fieldnames = None
+        self._saved_rows = -1   # len(rows) at last successful save
 
     @property
     def enabled(self):
@@ -79,25 +80,40 @@ class MetricsRecorder:
                 f"{len(self.rows)} rows -> {self.csv_path}. You can stop now (Ctrl-C).")
 
     def save(self):
-        """Write buffered rows to csv_path. Idempotent: safe to call again on
-        shutdown after an auto-saved window (rewrites the same file)."""
+        """Write buffered rows to csv_path ATOMICALLY (temp file + os.replace).
+
+        Why atomic: shutdown runs this inside `finally` while a SECOND signal can
+        still arrive (e.g. Ctrl-C delivers SIGINT to the process group AND launch
+        propagates its own SIGINT to each child). A plain open("w") rewrite that
+        gets KeyboardInterrupt'ed mid-write TRUNCATES the file — observed
+        2026-07-31: base.csv 3972 -> 1086 rows. With replace(), the reader only
+        ever sees the previous complete file or the new complete file.
+
+        Idempotent, and a no-op when the closed window was already saved (the
+        shutdown re-save would rewrite identical bytes)."""
         if not self.csv_path or not self.rows:
             return
+        if self._closed and self._saved_rows == len(self.rows):
+            return  # window closed and already on disk -- nothing new to write
         directory = os.path.dirname(self.csv_path)
         if directory:
             os.makedirs(directory, exist_ok=True)
         fieldnames = self._fieldnames or list(self.rows[0].keys())
-        with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
+        tmp_path = self.csv_path + ".tmp"
+        with open(tmp_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
             writer.writeheader()
             writer.writerows(self.rows)
+        os.replace(tmp_path, self.csv_path)   # atomic on POSIX
+        self._saved_rows = len(self.rows)
         self._log.info(f"Saved {len(self.rows)} metric rows to {self.csv_path}")
 
 
 def write_summary_csv(logger, path, rows):
     """Write a small summary CSV (list of dicts) once -- e.g. a yield/reliability
     tally at shutdown. No-op when path or rows is empty. Column set is the union
-    of the rows' keys, first-seen order preserved."""
+    of the rows' keys, first-seen order preserved. Atomic (temp + replace) for
+    the same second-signal reason as MetricsRecorder.save()."""
     if not path or not rows:
         return
     directory = os.path.dirname(path)
@@ -108,8 +124,10 @@ def write_summary_csv(logger, path, rows):
         for k in r.keys():
             if k not in fieldnames:
                 fieldnames.append(k)
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+    os.replace(tmp_path, path)
     logger.info(f"Saved yield summary ({len(rows)} rows) to {path}")

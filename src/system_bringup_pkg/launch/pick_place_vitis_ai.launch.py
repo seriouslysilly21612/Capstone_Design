@@ -102,10 +102,35 @@ def launch_setup(context, *args, **kwargs):
         'rs_launch.py',
     ])
 
+    # camera_config / target3d_config: A/B 실험 스위치 (2026-07-30).
+    #   기본 = 프로덕션 (raw depth + 단일점 reverse projection, color 30fps)
+    #   aligned = SDK full-frame align_depth + 직접 픽셀 조회, 양쪽 15fps
+    # 파일명을 통째로 받지 않고 짧은 키만 받아서 오타로 엉뚱한 조합이
+    # 조용히 섞이는 것을 막는다.
+    cam_key = LaunchConfiguration('camera_config').perform(context)
+    t3d_key = LaunchConfiguration('target3d_config').perform(context)
+    _CAM = {'production': 'realsense_pick_place.yaml',
+            'aligned': 'realsense_aligned_15fps.yaml'}
+    _T3D = {'production': 'target_3d.yaml',
+            'aligned': 'target_3d_aligned.yaml'}
+    if cam_key not in _CAM:
+        raise RuntimeError(
+            f"camera_config must be one of {sorted(_CAM)} (got '{cam_key}')")
+    if t3d_key not in _T3D:
+        raise RuntimeError(
+            f"target3d_config must be one of {sorted(_T3D)} (got '{t3d_key}')")
+    if (cam_key == 'aligned') != (t3d_key == 'aligned'):
+        # 한쪽만 aligned 면 3D 좌표가 조용히 틀린다(정합 안 된 depth 를 정합된
+        # 것처럼 읽거나 그 반대). 조용한 오답보다 기동 실패가 낫다.
+        raise RuntimeError(
+            f"camera_config='{cam_key}' and target3d_config='{t3d_key}' must "
+            "match: use both 'production' or both 'aligned'.")
+    print(f'[config] camera={_CAM[cam_key]}  target_3d={_T3D[t3d_key]}')
+
     realsense_config = PathJoinSubstitution([
         FindPackageShare('system_bringup_pkg'),
         'config',
-        'realsense_pick_place.yaml',
+        _CAM[cam_key],
     ])
 
     vitis_ai_detector_config = PathJoinSubstitution([
@@ -133,7 +158,7 @@ def launch_setup(context, *args, **kwargs):
     target_3d_config = PathJoinSubstitution([
         FindPackageShare('system_bringup_pkg'),
         'config',
-        'target_3d.yaml',
+        _T3D[t3d_key],
     ])
 
     target_base_config = PathJoinSubstitution([
@@ -293,6 +318,16 @@ def launch_setup(context, *args, **kwargs):
 
 def generate_launch_description():
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'camera_config', default_value='production',
+            description="'production' = raw depth, color 30fps (기본) | "
+                        "'aligned' = SDK align_depth ON, color+depth 15fps. "
+                        'target3d_config 와 반드시 같은 값이어야 한다.'),
+        DeclareLaunchArgument(
+            'target3d_config', default_value='production',
+            description="'production' = 단일점 reverse projection (기본) | "
+                        "'aligned' = aligned depth 직접 조회. "
+                        'camera_config 와 반드시 같은 값이어야 한다.'),
         DeclareLaunchArgument(
             'metrics', default_value='false',
             description='true = record performance+yield CSVs (all 4 nodes) and '
