@@ -14,7 +14,7 @@
 
 | | 명령 | 위치 |
 |---|---|---|
-| **보드** | `ros2 launch system_bringup_pkg pick_place_vitis_ai.launch.py` | Kria `~/ros2_ws` (192.168.120.132) |
+| **보드** | `ros2 launch system_bringup_pkg pick_place_vitis_ai.launch.py` | Kria `~/ros2_ws` (192.168.120.50) |
 | **데스크톱** | `ros2 run detection_viewer_pkg detection_viewer_node` | `~/pp_ws/viewer_ws` (jaehyeon@jaehyeon-Raimlab) |
 
 - 전체 파이프라인이 항상 돌고, 데스크톱 뷰어가 거기 붙는다. 압축 토픽은 **구독자가 있을 때만 인코딩**(lazy, §3)되므로 뷰어를 끄면 보드 압축 비용은 0.
@@ -26,13 +26,14 @@
 ## 2. 아키텍처
 
 ```
-[Kria 192.168.120.132]
+[Kria 192.168.120.50]
   realsense ─┬─→ /camera/camera/color/image_raw            (raw, 로컬 SHM으로 detector에게)
              └─→ /camera/camera/color/image_raw/compressed (JPEG — 구독자 있을 때만 인코딩)
                         │
   vitis_ai_detector ────┼──→ /detections   (RELIABLE, ~15 Hz, header = color header 바이트 복사본)
                         │
-                   (UDPv4 / eth0 / FastDDS / domain 0)
+          (UDPv4 / USB NIC enxc8a362ec54c4 / FastDDS / domain 0)
+                   ※ eth0는 IgH EtherCAT 전용(IP 없음)
                         ▼
 [Desktop Humble]  detection_viewer_node
                     CompressedImage + DetectionArray
@@ -138,7 +139,7 @@ ROS 인자는 `parse_known_args`로 분리해 `rclpy.init`에 넘긴다.
 
 ```bash
 # 데스크톱 — 최초 셋업 (my_interfaces + detection_viewer_pkg)
-scp -r ubuntu@192.168.120.132:~/ros2_ws/src/{my_interfaces,detection_viewer_pkg} \
+scp -r ubuntu@192.168.120.50:~/ros2_ws/src/{my_interfaces,detection_viewer_pkg} \
     ~/pp_ws/viewer_ws/src/
 cd ~/pp_ws/viewer_ws
 colcon build --packages-select my_interfaces detection_viewer_pkg --symlink-install
@@ -150,7 +151,7 @@ md5sum src/my_interfaces/msg/*.msg
 
 뷰어 코드만 바뀌었을 때(예: FPS 기능 추가)는 노드 파일만 갱신:
 ```bash
-scp ubuntu@192.168.120.132:~/ros2_ws/src/detection_viewer_pkg/detection_viewer_pkg/detection_viewer_node.py \
+scp ubuntu@192.168.120.50:~/ros2_ws/src/detection_viewer_pkg/detection_viewer_pkg/detection_viewer_node.py \
     ~/pp_ws/viewer_ws/src/detection_viewer_pkg/detection_viewer_pkg/detection_viewer_node.py
 # 최초 빌드를 --symlink-install로 했으면 재빌드 없이 재실행만 해도 반영됨
 ```
@@ -170,7 +171,7 @@ printenv RMW_IMPLEMENTATION ROS_DOMAIN_ID FASTRTPS_DEFAULT_PROFILES_FILE   # 전
 | 보드 RMW | `rmw_fastrtps_cpp` (launch가 pin) | `grep RMW_IMPL …/pick_place_vitis_ai.launch.py` |
 | 데스크톱 RMW | 설정 안 함 (Humble 기본=fastrtps) | `printenv RMW_IMPLEMENTATION` → 빈 값 |
 | ROS_DOMAIN_ID | 양쪽 unset = 0 | `printenv ROS_DOMAIN_ID` → 양쪽 빈 값 |
-| 보드 IP | 192.168.120.132/24 eth0 (DHCP) | `ip -4 addr show eth0` |
+| 보드 IP | **192.168.120.50/24 on `enxc8a362ec54c4` (USB NIC)** — ⚠️ 2026-07-31 확인. **eth0는 IP 없음**(IgH EtherCAT 점유). 옛 `192.168.120.132/eth0`는 EtherCAT 이관 전 값이니 문서에 남아 있으면 무시할 것 | `ip -br addr` |
 | color | 848×480×**30**, `/camera/camera/color/image_raw` | `realsense_pick_place.yaml` |
 | detections | `/detections`, ~15 Hz | `vitis_ai_detector.yaml` |
 | encoding | `rgb8` (JPEG엔 BGR가 담김 — §7) | `ros2 topic echo …/color/image_raw --field encoding --once` |
