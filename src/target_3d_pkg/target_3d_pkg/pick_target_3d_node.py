@@ -179,17 +179,6 @@ class PickTarget3DNode(Node):
         # reference on every pick (costs the old loop time again) — turn off
         # once live mismatch count stays 0.
         self.declare_parameter('epipolar_ab_check', False)
-        # A/B comparison mode (2026-07-30, 교수님 지적 확인용).
-        #   false = raw depth + single-point reverse projection (production).
-        #   true  = RealSense SDK full-frame alignment: subscribe to
-        #           /camera/camera/aligned_depth_to_color/image_raw, where the
-        #           depth pixel IS the color pixel, so no epipolar search is
-        #           needed and deprojection uses the COLOR intrinsics.
-        # Requires align_depth.enable:=true on the camera AND depth_topic /
-        # depth_info_topic pointed at the aligned_depth_to_color pair.
-        # The 3D point then lives in the COLOR optical frame -- that is handled
-        # automatically because out.header is copied from the depth message.
-        self.declare_parameter('use_aligned_depth', False)
 
         # Metrics (off by default): performance CSV per pick + yield tally.
         self.declare_parameter('metrics_csv_path', '')
@@ -207,9 +196,6 @@ class PickTarget3DNode(Node):
             self.get_parameter('depth_scale_16uc1').value
         )
         self.patch_radius = int(self.get_parameter('patch_radius').value)
-        self.use_aligned_depth = bool(
-            self.get_parameter('use_aligned_depth').value
-        )
         self.min_depth_m = float(self.get_parameter('min_depth_m').value)
         self.max_depth_m = float(self.get_parameter('max_depth_m').value)
         self.log_period_sec = float(self.get_parameter('log_period_sec').value)
@@ -289,8 +275,7 @@ class PickTarget3DNode(Node):
         self.prune_timer = self.create_timer(1.0, self.prune_static_subs)
 
         self.get_logger().info(
-            'pick_target_3d_node started '
-            f'({"SDK aligned depth (direct pixel)" if self.use_aligned_depth else "raw-depth reverse projection"}): '
+            'pick_target_3d_node started (raw-depth reverse projection): '
             f'{pick_target_topic} + {depth_topic} -> {output_topic}'
         )
 
@@ -408,9 +393,7 @@ class PickTarget3DNode(Node):
             self._emit(out, capture_stamp, compute_start_ns, in_age)
             return
 
-        # Aligned mode needs no depth->color extrinsics: the SDK already did the
-        # alignment full-frame, so the depth pixel IS the color pixel.
-        if self.R_dc is None and not self.use_aligned_depth:
+        if self.R_dc is None:
             self.log_warn_throttled(
                 'no_extrinsics', 'No depth->color extrinsics yet'
             )
@@ -442,39 +425,6 @@ class PickTarget3DNode(Node):
 
         u_c = float(msg.center_x)
         v_c = float(msg.center_y)
-
-        if self.use_aligned_depth:
-            # SDK already aligned depth INTO the color frame: the color pixel
-            # indexes the depth image directly. No epipolar search at all --
-            # that whole cost moves onto the camera node's full-frame align.
-            ui = int(round(u_c))
-            vi = int(round(v_c))
-            h, w = depth_img.shape[:2]
-            if not (0 <= ui < w and 0 <= vi < h):
-                self.log_warn_throttled(
-                    'bbox_outside_depth', 'bbox center outside aligned depth')
-                self._emit(out, capture_stamp, compute_start_ns, in_age)
-                return
-            z_m = self.get_depth_m_from_patch(depth_img, ui, vi, depth_msg.encoding)
-            if z_m is None:
-                self.log_warn_throttled(
-                    'no_valid_depth_patch',
-                    'No valid depth in patch (aligned)')
-                self._emit(out, capture_stamp, compute_start_ns, in_age)
-                return
-            # Aligned depth lives in the COLOR frame -> deproject with COLOR
-            # intrinsics (using depth intrinsics here would silently skew x/y).
-            point = deproject(self.c_fx, self.c_fy, self.c_cx, self.c_cy,
-                              ui, vi, z_m)
-            out.header = depth_msg.header          # = camera_color_optical_frame
-            if out.header.frame_id == '':
-                out.header.frame_id = self.depth_frame_id
-            out.depth_valid = True
-            out.x = float(point[0])
-            out.y = float(point[1])
-            out.z = float(point[2])
-            self._emit(out, capture_stamp, compute_start_ns, in_age)
-            return
 
         args = (
             u_c, v_c, depth_img, eff_scale,

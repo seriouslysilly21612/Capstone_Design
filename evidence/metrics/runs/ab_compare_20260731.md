@@ -41,6 +41,10 @@
 
 - 3D 노드 `use_aligned_depth` 파라미터 + aligned config 2종 + launch A/B 스위치
   (`camera_config`/`target3d_config`, 불일치 조합은 기동 거부).
+  **→ 실험 종료 후 코드에서 원복** — 전체 구현은 커밋 `52f2731`에 보존.
+  재실험 시 그 커밋에서 launch/노드/config 2종을 복원하면 된다.
+- `tools/metrics/ab_one_run.sh` — 무인 run 오케스트레이터(헬스 게이트 → 300 s
+  window → 단일 SIGINT 정상 종료 → 산출물 검증). production run에도 그대로 사용 가능.
 - **metrics 저장 무결성 픽스**(모든 run에 적용): ① CSV 원자적 저장(temp+`os.replace`)
   ② 노드 finally 진입 시 후속 시그널 무시 ③ (수동 Ctrl-C에도 있던) 2차 SIGINT가
   finally의 재저장을 절단하던 경쟁 제거. B 1·2차 실패(base 3972→1086행 절단)의 근본 원인.
