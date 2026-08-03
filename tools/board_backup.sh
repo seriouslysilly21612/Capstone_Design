@@ -89,6 +89,10 @@ done
 tar -czf "$OUT" --ignore-failed-read -C / "${EXIST[@]}" -C "$TMP" state
 [ -n "${SUDO_USER:-}" ] && chown "$SUDO_USER:$SUDO_USER" "$OUT"
 
+# 보드에는 최신 3개만 유지
+ls -t "$H"/board_backup_*.tar.gz 2>/dev/null | tail -n +4 | xargs -r rm
+
 echo
 echo "생성: $OUT ($(du -h "$OUT" | cut -f1))"
-echo "PC 보관: scp $OUT <user>@<pc>:~/kv260_backups/"
+echo "PC 보관 (원격 파일명까지 명시 — 일부 scp는 'dir/: Is a directory'로 실패):"
+echo "  scp $OUT <user>@<pc>:kv260_backups/$(basename "$OUT")"
