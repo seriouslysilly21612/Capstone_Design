@@ -2,31 +2,46 @@
 
 > **대상 독자: Claude (Opus 포함 모든 모델의 새 세션).**
 > 목적: 이전 대화 기록 없이 이 문서만으로 RPU FreeRTOS + SOEM 작업을 막힘없이 이어가게 하는 것.
-> 작성: 2026-07-08, Fable 세션에서 보드 실사를 거쳐 작성. 아래 "검증된 사실"은 전부 이 보드에서 명령으로 직접 확인된 것.
+> 작성: 2026-07-08 (Fable, 보드 실사 기반) / **최종 재검증·갱신: 2026-08-03, 커널 `5.15.199-rt91-rt-kv260c` 기준.** 아래 "검증된 사실"은 전부 이 보드에서 명령으로 직접 확인된 것.
+> **현재 트랙 상태 (2026-08-03)**: Gate 1(remoteproc + FreeRTOS 구동) 착수 단계. GEM3 이관(Phase 2+)은 사용자 재결정 전 금지 — APU IgH가 Indy7 실운용에 사용 중.
 
 ---
 
 ## 0. 필독 순서
 
 1. **이 파일 전체** — 특히 §1(세션 환경)과 §4(금지 사항)는 작업 전 반드시 숙지
-2. `~/ros2_ws/rpu_plan.md` — 전체 논리(왜 이 순서인가, 포팅 난제 분석)
-3. `~/ros2_ws/rpu_freertos_soem_execution_plan.md` — Gate 기준·리스크 표
+2. `~/ros2_ws/docs/rpu/rpu_plan.md` — 전체 논리(왜 이 순서인가, 포팅 난제 분석)
+3. `~/ros2_ws/docs/rpu/rpu_freertos_soem_execution_plan.md` — Gate 기준·리스크 표
 4. `~/ros2_ws/CLAUDE.md` — 프로젝트 전체 규칙 (한국어 답변, 학부 수준 설명, source priority)
-5. 질문 주제별 공식 문서 링크: `~/ros2_ws/site_md/reference_02_openamp_freertos_ethernet.md`
+5. 질문 주제별 공식 문서 링크: `~/ros2_ws/docs/reference/reference_02_openamp_freertos_ethernet.md`
 6. 지속 메모리: `kria-rt-preempt-project.md` (APU IgH 트랙과의 관계 포함)
+7. APU 쪽(RAON-RT/IgH) 맥락이 필요하면: `~/ros2_ws/docs/RAON-RT/merge.md` (정본 로그 — RPU+SOEM은 §9 백로그 항목)
 
 ---
 
 ## 1. 세션 환경 — 가장 먼저 인지할 것
 
-**Claude Code는 KV260 보드 그 자체에서 실행 중이다.** (`uname -a` → `5.15.0-*-xilinx-zynqmp aarch64`, hostname `kria`)
+**Claude Code는 KV260 보드 그 자체에서 실행 중이다.** (`uname -r` → `5.15.199-rt91-rt-kv260c`, PREEMPT_RT, hostname `kria`)
 
 이것이 의미하는 것:
 - 보드 상태를 추측하지 말 것. `/proc/device-tree`, `/sys`, `dmesg`로 직접 확인 가능하다.
-- **원격 연결(Tailscale/SSH)이 eth0(GEM3) 위에 있다. eth0을 죽이는 명령 = 이 세션의 즉사.**
-  `macb unbind`, `ip link set eth0 down`, GEM3 DT disable 등은 반드시 사용자에게 고지하고, 사용자가 보드 옆에 있을 때(UART 콘솔 준비 상태) 실행할 것. 사용자 확인: 보드는 손 닿는 곳에 있고 시리얼 터미널 사용 가능.
-- Vitis는 이 보드에서 실행 불가(aarch64). **모든 R5 elf 빌드는 사용자의 x86 PC에서** 이루어진다. Claude는 소스/링커스크립트/DT를 작성해 주고, 빌드는 사용자에게 절차를 안내하는 분업 구조다.
+- **원격 = AX88179B USB Ethernet NIC(`enx…`, 드라이버 `ax_usb_nic` v4.1.0, `192.168.120.50/24`) 경유 SSH. Tailscale은 제거됨.**
+  eth0(GEM3)은 더 이상 원격 생명줄이 아니다 — 대신 **IgH EtherCAT 예약 포트**다(아래 참조). USB NIC를 죽이는 명령(`ip link set enx… down`, `ax_usb_nic` 언로드, USB 리셋)이 이제 세션 즉사 경로다.
+- **eth0(GEM3)의 현재 상태**: 평시엔 macb 소유·IP 없음(유휴). RAON-RT 실기 세션 때 IgH(`ethercat.service` 기동)가 점유해 Indy7을 제어한다. **RPU가 GEM3를 가져가는 Phase 2+는 사용자 재결정 전 착수 금지.**
+- **로봇 실기 세션 중 금지(E34)**: RAON-RT 실기 구동 중에는 보드에서 무거운 작업(빌드, 대량 IO, 에이전트 다중 실행) 금지 — 1kHz 제어 지터를 오염시킨 전례가 있다. RPU 작업은 실기 세션 밖에서.
+- **sudo는 비밀번호 필요** (passwordless 아님). sudo가 필요한 단계(dmesg, iomem, overlay 적용, modprobe)는 사용자에게 실행을 요청하거나 비밀번호 입력을 받는다.
+- Vitis는 이 보드에서 실행 불가(aarch64). **모든 R5 elf 빌드는 사용자의 x86 PC에서** 이루어진다. Claude는 소스/링커스크립트/DT를 작성해 주고, 빌드는 사용자에게 절차를 안내하는 분업 구조다. elf 전송은 USB NIC 경유 scp — GEM3 상태와 무관하다.
 - 사용자 작업 스타일: 일일이 허락 묻지 말고 자율 진행하되, **연결 단절·비가역 작업만은 사전 고지**. 답변은 한국어(기술용어는 영어), 학부생 수준에서 원리부터 설명.
+
+**원격 작업 온보딩 (새 세션 첫 5분)**:
+```bash
+uname -r                                   # 5.15.199-rt91-rt-kv260c 인지 확인 (다르면 §3 전체 재검증)
+ip -br link; ip route | head -3            # 원격 경로가 enx…(USB NIC)인지, eth0 상태 확인
+systemctl is-active ethercat               # active면 로봇 세션 가능성 → 사용자에게 실기 여부 확인 후 작업
+ls /sys/class/remoteproc/                  # remoteproc0 있으면 overlay 적용된 상태
+ls /sys/kernel/config/device-tree/overlays/  # kv260-smartcam_image_1 + (있다면) rpu
+cat /sys/devices/system/cpu/isolated       # 3 — CPU3는 RAON-RT 전용, 침범 금지
+```
 
 ---
 
@@ -37,34 +52,38 @@
 | 실행 코어 | R5F-**0**, **split** 모드 | lockstep 불필요, 코어1은 추후 여유 |
 | RTOS | FreeRTOS 10 (Vitis BSP `freertos10_xilinx`) | Kria 공식 지원 경로 |
 | EtherCAT master | **SOEM** v1.4.x (RPU) / IgH는 APU 전용 | SOEM만이 RTOS 포팅 가능 구조 |
-| Vitis 버전 | **2022.1** | kria-apps-docs 튜토리얼 기준, 커널 5.15 세대 일치. 미설치 상태 → Phase 0에서 설치 |
+| Vitis 버전 | **2022.1** | kria-apps-docs 튜토리얼 기준, 커널 5.15 세대 일치. **2026-08-03 현재도 미설치** → Phase 0에서 설치 |
 | RPU 로드 | Linux **remoteproc** (+ 안정화 후 systemd 자동화) | Kria는 BOOT.BIN 수정이 비표준(부트펌웨어 QSPI 고정) |
 | 코드 배치 | DDR 예약 영역 링크, 지연민감 코드만 TCM | SOEM+제어 코드가 TCM 128KB 초과 |
 | DMA 버퍼 | 처음엔 **non-cacheable** (R5 MPU) | 캐시 일관성 버그 원천 차단, 최적화는 동작 후 |
 | SOEM 수신 | 처음엔 **폴링**, 이후 인터럽트+큐 | 단순한 것부터 검증 |
-| 작업 순서 | **APU IgH 완료 후 Phase 2 착수** (Phase 0~1은 병행 가능) | GEM3가 하나뿐이라 APU EtherCAT과 동시 사용 불가 |
-| 대상 로봇 | Indy7, STEP 우회 드라이브 직결, CiA402+CSP | 사용자가 PC에서 EtherCAT 제어 성공 코드 보유 → Phase 4는 이식 |
-| 테스트 슬레이브 | LS Mecapion **L7N** 서보 + 모터 + 전원 보유 | 문서 PDF는 사용자에게 요청 → `~/ros2_ws/docs/l7n/` |
-| 범위 | 그리퍼 제외, 말단부가 물체 위 정지까지. 주기 1kHz 가정(미확정) | 사용자 확인 2026-07-08 |
+| 작업 순서 | **당분간 Phase 0~1만** (2026-08-03 사용자 확정). Phase 2+(GEM3 이관)는 별도 사용자 결정 필요 | APU IgH는 "완료"가 아니라 **실운용 중**(RAON-RT가 Indy7 제어) — GEM3를 가져가면 그동안 로봇 운용 중단. 이관 시 APU 제어 중단 합의 + macb rebind 복구 절차 필수 |
+| 대상 로봇 | Indy7, STEP 우회 드라이브 직결, CiA402+CSP | APU에서 IgH+RAON-RT로 실제 제어 성공·운용 중 → Phase 4는 **IgH→SOEM 번역 이식** (`~/RAON-RT/EMasterApp/Device/EcatCommon.h`가 IgH 타입 사용) |
+| 테스트 슬레이브 | LS Mecapion **L7N** 서보 + 모터 + 전원 보유 | 문서 PDF는 사용자에게 요청 → `~/ros2_ws/docs/l7n/` (2026-08-03 현재 미수령) |
+| 범위 | 그리퍼 제외, 말단부가 물체 위 정지까지. **주기 1kHz 확정** | RAON-RT APU 트랙이 1kHz로 실운용하며 실증 (2026-07~08) |
 
 ---
 
 ## 3. 검증된 보드 사실 + 재검증 명령
 
 작업 시작 시(특히 재부팅/커널 업데이트 후) 아래를 다시 실행해 상태가 유지되는지 확인하라.
+**2026-08-03에 RT 커널(`5.15.199-rt91-rt-kv260c`) 기준으로 전 항목 재검증 완료** — 7/8의 우려(커스텀 커널에서 remoteproc 지원 소실)는 발생하지 않았다. 커널 재빌드 불필요.
 
-| 사실 | 검증 명령 | 2026-07-08 결과 |
+| 사실 | 검증 명령 | 2026-08-03 결과 (RT 커널) |
 |---|---|---|
-| remoteproc 드라이버는 모듈로 존재, **binding = `xlnx,zynqmp-r5-remoteproc`** (Xilinx 5.15 벤더 binding — upstream 6.x의 `zynqmp-r5fss`와 다름!) | `modinfo /lib/modules/$(uname -r)/kernel/drivers/remoteproc/zynqmp_r5_remoteproc.ko \| grep alias` | alias 확인됨 |
-| DT에 R5 노드 없음 → overlay 필요 | `ls /sys/class/remoteproc/` | 비어 있음 |
-| configfs overlay 동작 | `ls /sys/kernel/config/device-tree/overlays/` | `kv260-smartcam_image_1` 존재 |
-| GEM3만 활성 (ff0e0000, macb, eth0) | `for g in ff0b ff0c ff0d ff0e; do cat /proc/device-tree/axi/ethernet@${g}0000/status; done` | disabled/disabled/disabled/okay |
-| UART0(ff000000) **disabled**, UART1(ff010000)=Linux 콘솔(ttyPS1) | `cat /proc/device-tree/axi/serial@ff000000/status` | disabled |
+| remoteproc 드라이버 모듈 존재, vermagic 일치, **binding = `xlnx,zynqmp-r5-remoteproc`** (Xilinx 5.15 벤더 binding — upstream 6.x의 `zynqmp-r5fss`와 다름!) | `modinfo /lib/modules/$(uname -r)/kernel/drivers/remoteproc/zynqmp_r5_remoteproc.ko \| grep alias` | 존재·alias 확인. 커널 config: `ZYNQMP_R5_REMOTEPROC=m`, `REMOTEPROC=y`, `ZYNQMP_IPI_MBOX=y` |
+| rpmsg 스택 완비 | `ls /lib/modules/$(uname -r)/kernel/drivers/rpmsg/` | rpmsg_core/char/ns/virtio 전부 존재 (`RPMSG*=m`) |
+| DT에 R5 노드 없음 → overlay 필요 | `ls /sys/class/remoteproc/` | 비어 있음 (모듈도 미로드 — 정상, probe 대상 없음) |
+| configfs overlay 동작 (`OF_OVERLAY=y`, `OF_CONFIGFS=y`) | `ls /sys/kernel/config/device-tree/overlays/` | `kv260-smartcam_image_1` applied — RT 커널에서 실증 |
+| GEM3만 활성 (ff0e0000, macb, eth0). **평시 유휴(IP 없음), IgH 세션 시 점유** | `for g in ff0b ff0c ff0d ff0e; do cat /proc/device-tree/axi/ethernet@${g}0000/status; done`; `ip -br addr show eth0` | disabled×3/okay. eth0 UP·IP 없음. IgH kmod는 `/lib/modules/$(uname -r)/ethercat/`에 이 커널용으로 빌드되어 있고 `ethercat.service`는 필요 시 기동 |
+| 원격 = USB NIC | `ip route \| head -3` | default via 192.168.120.1 dev `enx…` (ax_usb_nic v4.1.0) |
+| UART0(ff000000) **disabled**, UART1(ff010000)=Linux 콘솔(ttyPS1) | `cat /proc/device-tree/axi/serial@ff000000/status` | disabled (변화 없음) |
 | 기존 IPI: mailbox@ff9905c0, `xlnx,ipi-id = <4>` (충돌 금지) | `od -An -tx1 /proc/device-tree/zynqmp-ipi/mailbox@ff9905c0/xlnx,ipi-id` | 00 00 00 04 |
-| RAM 3.8GiB, **CMA 1000M 중 여유 ~13MB** (DPU가 점유) | `grep -i cma /proc/meminfo` | CmaFree 13448 kB |
-| cmdline: `clk_ignore_unused`, `cma=1000M` | `cat /proc/cmdline` | 확인됨 |
-| 부팅: U-Boot + flash-kernel `image.fit` (백업 `.bak` 존재) | `ls /boot/firmware/` | 확인됨 |
-| rpmsg 모듈 존재 | `ls /lib/modules/$(uname -r)/kernel/drivers/rpmsg/` | rpmsg_char.ko 등 |
+| reserved-memory 기존 항목은 `pmu@7ff00000`뿐 | `ls /proc/device-tree/reserved-memory/` | R5 carve-out은 overlay가 추가해야 함 |
+| RAM 3.8GiB, CMA 1000M 중 **여유 ~340-400MB** (smartcam/VCU/zocl 점유분 제외) | `grep -i cma /proc/meminfo` | CmaFree ~340-400MB (7월의 13MB에서 크게 완화 — 시점따라 변동) |
+| cmdline: `clk_ignore_unused`, `cma=1000M` + **RT 격리 파라미터 추가됨** | `cat /proc/cmdline` | `skew_tick=1 isolcpus=3 nohz_full=3 rcu_nocbs=3 irqaffinity=0-2` — **CPU3는 RAON-RT 1kHz 전용, RPU 작업이 CPU3에 부하 금지** |
+| 부팅: U-Boot + flash-kernel `image.fit` (`.bak`+`image.fit.stock-1070` 백업 존재) | `ls /boot/firmware/` | 확인됨. flash-kernel db에 KV260 항목 존재 |
+| 모듈 서명 강제 없음 (OOT 모듈 로드 자유) | `cat /sys/kernel/security/lockdown` | `[none]` |
 
 **RPU 예약 메모리 확정 전 필수 확인**: `sudo dmesg | grep -iE 'cma|reserved'` 및 `sudo cat /proc/iomem`으로 CMA/기존 예약 영역의 실제 주소를 확인하고 겹치지 않게 잡을 것. 관례상 0x3ed00000 부근(Xilinx OpenAMP 예제 표준)을 쓰되 **이 보드의 CMA 배치와 겹치지 않는지 반드시 검증**.
 
@@ -72,14 +91,15 @@
 
 ## 4. 금지·주의 사항 (Opus가 세션을 망치는 지름길들)
 
-1. **eth0 관련 명령은 사전 고지 없이 실행 금지** (§1). unbind 복구는 `echo ff0e0000.ethernet > /sys/bus/platform/drivers/macb/bind` 또는 재부팅.
+1. **USB NIC(`enx…`)를 건드리는 명령 = 원격 세션 즉사** — 절대 금지. **eth0 관련 명령도 사전 고지 없이 실행 금지** (IgH EtherCAT 예약 포트 — 로봇 트랙과 충돌). unbind 복구는 `echo ff0e0000.ethernet > /sys/bus/platform/drivers/macb/bind` 또는 재부팅.
+1-b. **RAON-RT 실기 세션 중에는 RPU 작업 자체를 보류** (E34 — 보드 부하가 1kHz 지터 오염). `systemctl is-active ethercat`이 active면 사용자에게 실기 여부부터 확인.
 2. **QSPI 부트펌웨어(`xmutil bootfw_*`)를 건드리지 말 것.** 이 프로젝트에 불필요하며 잘못되면 복구가 어렵다.
 3. **kv260-smartcam overlay를 내리지 말 것** (`xmutil unloadapp` 금지). perception 파이프라인(DPU)이 그 위에서 돈다. RPU 작업과 충돌하지 않는다.
 4. `/boot/firmware/image.fit` 직접 수정 금지. DT를 boot-time에 바꿀 땐 §6-B의 flash-kernel 절차만 사용(자동 백업 유지).
 5. **RPU reserved-memory를 runtime configfs overlay로만 잡은 채 실사용 금지** — §6-B의 이유 참조. 실험은 가능하나 본 운용은 boot-time 반영 후.
 6. 이 커널의 remoteproc binding은 **Xilinx 5.15 벤더 형식**이다. 웹에서 찾은 upstream 6.x용 DT 예제(`xlnx,zynqmp-r5fss`, `compatible = "xlnx,zynqmp-r5f"`)를 그대로 쓰면 probe되지 않는다. 반드시 §6-A의 방법으로 이 커널 소스의 예제를 기준으로 삼을 것.
 7. FreeRTOS elf에 **resource table 섹션이 없으면 remoteproc 로드가 실패하거나 경고 후 기능 제한**된다. 순정 "Hello World" 템플릿에는 없다 — §7의 지시대로 OpenAMP echo-test 템플릿을 베이스로 쓸 것.
-8. 사용자에게 물어봐도 되는 것: Indy7 PC 제어 코드의 master 종류(Phase 4 전), 제어 주기 확정, L7N PDF 요청, Vitis 설치 진행 상황, APU IgH 완료 여부(Phase 2 전제). 그 외 기술 판단은 자율 진행.
+8. 사용자에게 물어봐도 되는 것: L7N PDF 요청, Vitis 설치 진행 상황, **GEM3 이관 시점 합의(Phase 2 전제 — 로봇 운용 중단 수반)**, 실기 세션 일정. 그 외 기술 판단은 자율 진행. (master 종류=IgH, 주기=1kHz는 이미 확정 — §2 참조, 다시 묻지 말 것)
 
 ---
 
@@ -87,14 +107,16 @@
 
 | 경로 | 내용 |
 |---|---|
-| `~/ros2_ws/rpu_plan.md` | 마스터 계획 (논리 전개) |
-| `~/ros2_ws/rpu_freertos_soem_execution_plan.md` | 실행 절차·Gate·리스크 |
-| `~/ros2_ws/rpu_guide_for_claude.md` | 이 문서 |
-| `~/ros2_ws/docs/l7n/` | L7N 드라이브 문서 (Phase 3 때 사용자로부터 수령) |
-| `~/ros2_ws/src/apu_rpu_bridge_pkg/` | Phase 5에서 구현할 ROS2 브리지 (현재 placeholder) |
+| `~/ros2_ws/docs/rpu/rpu_plan.md` | 마스터 계획 (논리 전개) |
+| `~/ros2_ws/docs/rpu/rpu_freertos_soem_execution_plan.md` | 실행 절차·Gate·리스크 |
+| `~/ros2_ws/docs/rpu/rpu_guide_for_claude.md` | 이 문서 |
+| `~/ros2_ws/tools/rpu/` | RPU 작업 산출물 (dtso/dtbo, 스크립트) — Gate 1 착수 시 생성 |
+| `~/ros2_ws/docs/l7n/` | L7N 드라이브 문서 (Phase 3 때 사용자로부터 수령 — 아직 없음) |
+| `~/ros2_ws/src/apu_rpu_bridge_pkg/` | **삭제됨(2026-07-15 정리, `0313586`)** — Phase 5에서 재생성 |
+| `~/ros2_ws/docs/RAON-RT/merge.md` | APU 트랙(IgH+RAON-RT) 정본 로그 — Phase 4 이식 원본 코드는 `~/RAON-RT/` |
 | `/lib/firmware/` | RPU elf 배치 위치 |
 | `/sys/kernel/config/device-tree/overlays/` | runtime overlay 적용 지점 |
-| `~/ros2_ws/site_md/reference_02_*.md` | Kria FreeRTOS/OpenAMP 공식 링크 모음 |
+| `~/ros2_ws/docs/reference/reference_02_*.md` | Kria FreeRTOS/OpenAMP 공식 링크 모음 |
 
 **진행 기록 규칙**: Phase/Gate 달성·중요 발견·결정 변경 시 ①execution_plan의 해당 섹션 갱신 ②지속 메모리 `kria-rt-preempt-project.md` 갱신. 사용자 확인 사항은 날짜와 함께 기록.
 
@@ -107,11 +129,11 @@
 **절대 원칙: 이 커널의 소스에서 binding과 예제를 추출해 그것만 따른다.**
 
 ```bash
-# 방법 1: Xilinx 커널 트리에서 이 커널의 베이스(5.15, xlnx_rebase_v5.15 계열) 문서 확인
-#   https://github.com/Xilinx/linux-xlnx  → Documentation/devicetree/bindings/remoteproc/
-#   (xlnx,zynqmp-r5-remoteproc 문서 + zynqmp 예제 dts에서 rf5ss/IPI 노드 형식 확인)
-# 방법 2: apt로 소스 패키지 (deb-src 활성화 필요)
-apt-get source linux-xilinx-zynqmp-5.15  # 또는 해당 패키지명; apt showsrc로 확인
+# 방법 1 (권장): RT 커널을 빌드한 소스 트리가 사용자 x86 PC에 있다 (Ubuntu Xilinx 5.15 소스 + RT 패치).
+#   그 트리의 Documentation/devicetree/bindings/remoteproc/ 와
+#   drivers/remoteproc/zynqmp_r5_remoteproc.c (property 파싱 코드가 최종 진실) 를 기준으로 삼는다.
+# 방법 2: https://github.com/Xilinx/linux-xlnx → 5.15 계열(xlnx_rebase_v5.15) 브랜치의 같은 경로.
+#   (현재 커널은 커스텀 빌드라 apt-get source는 정확한 소스가 아님 — 베이스 확인용으로만)
 ```
 
 overlay에 들어가야 하는 요소 (형식은 위 소스 기준으로 작성):
@@ -187,7 +209,7 @@ Claude는 보드에서 실행 불가하므로 아래를 사용자에게 절차�
 
 ## 8. Phase 2 상세 — GEM3 이관의 함정 지도
 
-**전제 확인**: 사용자에게 APU IgH 작업 완료 여부 확인. 미완이면 Phase 2 착수 금지(GEM3 충돌).
+**전제 확인 (2026-08-03 갱신)**: APU IgH는 "완료"를 넘어 **Indy7 실운용 중**이다. Phase 2는 GEM3를 가져가므로 그동안 APU 로봇 제어가 중단된다. 착수 전 필수: ①사용자와 운용 중단 기간 합의 ②macb rebind 복구 절차 준비(스크립트화) ③실기 세션과 겹치지 않는 시간대. 사용자 결정 없이 착수 금지.
 
 ### 절차 개요
 1. 사용자 고지 + UART/물리 접근 준비 확인 (§1)
@@ -252,7 +274,7 @@ soem/oshw/freertos/oshw.c            ← htons/ntohs 등 (기존 포트 복사 �
 - TTC 인터럽트 1kHz 태스크에서 send/receive_processdata. DC 활성화, SYNC0 정렬.
 - jitter를 R5 사이클 카운터(PMU cycle counter)로 측정·기록 — APU IgH 대비 정량 비교가 이 프로젝트의 성과 지표.
 - L7N: CiA402 상태머신(Shutdown→Switch On→Enable Operation), CSP 모드. 랩 가이드(MAN-20241113-LX02H0001)의 드라이브 설정 개념 참조 가능(IgH 기준이지만 CiA402 시퀀스는 동일).
-- 이후 **사용자 보유 Indy7 PC 제어 코드** 수령 → master 종류 확인(SOEM이면 application 거의 그대로, IgH/TwinCAT이면 SOEM API로 번역) → 이식.
+- 이후 **Indy7 제어 코드 이식**: 원본은 `~/RAON-RT/`(EMasterApp) — **IgH 기반 확정**(`EcatCommon.h`가 `ec_slave_config_t` 등 IgH 타입 사용) → SOEM API로 번역 계층 필요. CiA402 시퀀스·PDO 매핑·제어 로직(CTC, 마찰 FF 등)은 재사용, EtherCAT API 호출부만 교체. 상세 맥락은 `docs/RAON-RT/merge.md`.
 
 **Phase 5 (rpmsg + ROS2 통합)**:
 - RPU: OpenAMP echo-test 기반 rpmsg endpoint. Linux: `modprobe rpmsg_char` → `/dev/rpmsg*`.
@@ -280,8 +302,9 @@ PC측: Vitis XSCT + JTAG (USB 케이블)로 R5 브레이크포인트 디버깅 �
 
 ## 12. 미결 사항 (해소되면 이 문서와 메모리 갱신)
 
-- [ ] Indy7 PC 제어 코드의 EtherCAT master 종류 (Phase 4 전, 사용자에게 질문)
-- [ ] 제어 주기 확정 — 1kHz 가정 중 (사용자가 확인 후 알려주기로 함)
-- [ ] L7N 문서 PDF 수령 (Phase 3 착수 시)
-- [ ] KV260 캐리어의 PS UART0 물리 라우팅 여부 (UART0 쓰려는 경우만)
-- [ ] RPU reserved-memory 최종 주소 (CMA 실제 배치 확인 후 — §3 마지막 항목)
+- [x] ~~Indy7 제어 코드의 EtherCAT master 종류~~ → **IgH 확정** (2026-08-03, `~/RAON-RT/EMasterApp/Device/EcatCommon.h` 실사). Phase 4는 IgH→SOEM 번역 이식
+- [x] ~~제어 주기 확정~~ → **1kHz 확정** (2026-08-03, RAON-RT 실운용 실증)
+- [ ] L7N 문서 PDF 수령 (Phase 3 착수 시 — `docs/l7n/` 아직 없음)
+- [ ] KV260 캐리어의 PS UART0 물리 라우팅 여부 (UART0 쓰려는 경우만 — 1순위 로그 수단은 trace buffer라 급하지 않음)
+- [ ] RPU reserved-memory 최종 주소 (sudo로 dmesg/iomem에서 CMA 실배치 확인 후 확정 — §3 마지막 항목)
+- [ ] GEM3 이관(Phase 2) 시점 — 사용자 결정 대기 (로봇 운용 중단 수반)

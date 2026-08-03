@@ -1,8 +1,9 @@
 # RPU FreeRTOS + SOEM EtherCAT Master 실행 계획
 
 작성: 2026-07-07. 보드 실사(이 문서의 "보드 검증 상태" 참조) 기반으로 작성된 실행 계획.
+> **상태 갱신 (2026-08-03)**: 이 문서의 "보드 검증 상태" 표는 구커널(5.15.0-1070) 기준 — **현재 사실은 `rpu_guide_for_claude.md` §3이 정본** (RT 커널 재검증 완료, 재빌드 불필요). Gate 1 착수 중.
 목적: Pick & Place 시스템의 미구현 계층 — **RPU firmware + APU↔RPU bridge + 로봇 EtherCAT 제어** — 구축.
-참조: `site_md/reference_02_openamp_freertos_ethernet.md` (Kria FreeRTOS/OpenAMP 공식 문서 링크),
+참조: `docs/reference/reference_02_openamp_freertos_ethernet.md` (Kria FreeRTOS/OpenAMP 공식 문서 링크),
 랩 가이드 MAN-20241113-LX02H0001 (IgH 기반, 프로토콜 개념 참조용).
 
 ## 아키텍처 목표
@@ -40,7 +41,7 @@
 2. **RPU 로드는 remoteproc** (Kria Ubuntu 표준 흐름). BOOT.BIN 수정은 Kria에선 비표준(부트 펌웨어가 QSPI에 고정, xmutil bootfw 관리) — 부팅 자동화는 **systemd 서비스로 remoteproc start** 방식 사용.
 3. **R5는 split 모드, R5F-0 사용**. 코드/데이터는 DDR 예약 영역에 링크(SOEM+스택이 TCM 128KB 초과), 주기 태스크/ISR 등 지연 민감 코드만 TCM 배치.
 4. **GEM3 이관은 2단계**: 개발 중엔 런타임 driver unbind(`echo ff0e0000.ethernet > /sys/bus/platform/drivers/macb/unbind`, 재부팅으로 복구 가능), 안정화 후 boot-time DT에서 disable.
-5. **Vitis 버전: 2022.1** (classic IDE). 근거: kria-apps-docs FreeRTOS/OpenAMP 튜토리얼이 2022.1 기준, 보드 커널 5.15 세대와 일치, site_md 참조 문서들도 2022.1 흐름. CLAUDE.md 방침("최신보다 board-validated 버전") 부합. 빌드는 x86 PC에서 수행 (보드는 aarch64라 Vitis 실행 불가).
+5. **Vitis 버전: 2022.1** (classic IDE). 근거: kria-apps-docs FreeRTOS/OpenAMP 튜토리얼이 2022.1 기준, 보드 커널 5.15 세대와 일치, docs/reference/ 참조 문서들도 2022.1 흐름. CLAUDE.md 방침("최신보다 board-validated 버전") 부합. 빌드는 x86 PC에서 수행 (보드는 aarch64라 Vitis 실행 불가).
 
 ## 확정 사항 (2026-07-08 사용자 확인, 2차 업데이트)
 
@@ -74,7 +75,7 @@ TCM ATCM (R5 view 0x0, APU view 0xffe00000) : 벡터테이블 + 지연민감 코
 CMA(0x… cma=1000M)와 겹치지 않는지 `/proc/iomem`으로 확인 후 확정.
 
 ### 보드 쪽
-1. **R5 remoteproc DT overlay 작성** (`rpu_rproc.dtso`): `xlnx,zynqmp-r5-remoteproc` 노드(cluster-mode=split), reserved-memory 노드들, RPU용 IPI mailbox 노드. 레퍼런스: Xilinx wiki "OpenAMP" + kria-apps-docs OpenAMP landing (site_md 02 링크).
+1. **R5 remoteproc DT overlay 작성** (`rpu_rproc.dtso`): `xlnx,zynqmp-r5-remoteproc` 노드(cluster-mode=split), reserved-memory 노드들, RPU용 IPI mailbox 노드. 레퍼런스: Xilinx wiki "OpenAMP" + kria-apps-docs OpenAMP landing (docs/reference/reference_02 링크).
 2. 컴파일: `dtc -@ -O dtb -o rpu_rproc.dtbo rpu_rproc.dtso`
 3. 적용(런타임, smartcam과 같은 방식):
    ```bash

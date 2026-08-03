@@ -3,6 +3,8 @@
 작성: 2026-07-08. 지금까지의 논의(보드 실사 + 사용자 확인 사항)를 종합한 논리 전개 중심의 마스터 계획.
 명령어 수준의 세부 절차는 `rpu_freertos_soem_execution_plan.md` 참조. 이 문서는 **무엇을, 어떤 순서로, 왜** 하는지를 설명한다.
 
+> **상태 갱신 (2026-08-03, RPU 트랙 착수)**: 논리는 유효하나 일부 전제가 변했다 — 현재 사실은 `rpu_guide_for_claude.md` §1~§3이 정본. 요점: RT 커널(`5.15.199-rt91-rt-kv260c`)에서 remoteproc 지원 전부 확인(재빌드 불필요), 원격=USB NIC(eth0 아님), APU IgH는 "선행 작업"이 아니라 **실운용 중**(Phase 2 이관은 사용자 결정 필요), Indy7 코드 master=IgH 확정(§7 미결 2건 해소), 당면 목표=Gate 1.
+
 ---
 
 ## 1. 목표와 전제
@@ -46,7 +48,7 @@ perception(APU, 기존 완성) → pick 좌표 → **RPU의 1kHz 실시간 Ether
 └─────────────────────────────────────────────────────┘
 ```
 
-**세 개의 경계를 분리해서 본다** (site_md reference_01 원칙):
+**세 개의 경계를 분리해서 본다** (docs/reference/reference_01 원칙):
 1. PL ↔ APU: DPU 비전 — 기존 완성, 이 계획과 무관 (RPU와 충돌 없음)
 2. APU → RPU: OpenAMP rpmsg — 목표점 전달 + 상태 회신 (Phase 5)
 3. RPU → 외부: EtherCAT raw frame over GEM3 (Phase 2~4)
@@ -233,7 +235,7 @@ jitter 원천: R5 타이머 ISR(TCM 배치 시 ~1µs급) + DDR 경합(APU/DPU와
 ## 8. 참고 자료
 
 - 명령어 수준 절차·메모리 맵: `rpu_freertos_soem_execution_plan.md`
-- Kria FreeRTOS/OpenAMP 공식 문서 링크 모음: `site_md/reference_02_openamp_freertos_ethernet.md`
-- 보드/아키텍처: `site_md/reference_01_kria_core_architecture.md`
+- Kria FreeRTOS/OpenAMP 공식 문서 링크 모음: `docs/reference/reference_02_openamp_freertos_ethernet.md`
+- 보드/아키텍처: `docs/reference/reference_01_kria_core_architecture.md`
 - SOEM 소스: https://github.com/OpenEtherCATsociety/SOEM (v1.4.x)
 - 랩 가이드 MAN-20241113-LX02H0001 (IgH 기반 — 프로토콜/드라이브 설정 개념 참조)
