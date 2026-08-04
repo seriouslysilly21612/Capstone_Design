@@ -67,6 +67,7 @@ Detect objects via vision → compute 3D pick position → generate robot trajec
 | 시스템 전체 규칙·소통 | `CLAUDE.md` (루트) | 항상 우선 |
 | 실행법·전제조건·저장소 구조 | `README.md` (루트) | **처음 보는 사람은 여기부터** |
 | 파이프라인 상세(노드별 파라미터·기법) | `docs/vision/workflow.md` | 비전 변경 전 필독 |
+| **throughput — 어디서 정해지나 / 올리는 순서** | `docs/vision/throughput.md` | **성능 향상 요청 시 필독**(2026-08-05). 병목은 카메라도 DPU도 아닌 `process_period_sec` 게이트 |
 | **비전 코드 정독(detector node + worker)** | `docs/vision/detector_worker_walkthrough.md` | 코드 공부용 지도(2026-07-20) |
 | 시간순 히스토리(결정·측정·root-cause) | `docs/history.md` ← *구 progress.md* | 과거 경위 추적 |
 | **비전 전체 — 학습→DPU 배포→최적화** | `docs/vision/vision_final.md` | **비전 트랙 종합 정본**(교수님 보고용). SSD→YOLO 전 과정 |

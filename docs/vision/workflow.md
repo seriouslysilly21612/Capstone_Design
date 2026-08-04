@@ -336,6 +336,13 @@ PickTarget3D.msg    : std_msgs/Header header, bool target_valid, bool depth_vali
 
 > throughput의 최종 천장은 **카메라 공급률(realsense 노드 단일 스레드 처리)** 이다. 더 올리려면 카메라 측(노드 부하/해상도) 또는 C++ 비전 경로가 필요. 단, pick-and-place(정적 물체)엔 현 ~17 Hz로 충분.
 
+> **⚠️ 2026-08-05 보강**: 위 문장의 "최종 천장"은 *모든 소프트웨어 상한을 걷어낸 뒤*의
+> 천장이라는 뜻으로만 맞다. **지금 실제로 묶고 있는 건 카메라가 아니다** — 카메라는
+> 29.4 Hz를 공급하는데 파이프라인은 15.3 Hz만 내고, 구속조건은 `process_period_sec: 0.045`
+> 게이트(의도된 15 Hz 상한)다. DPU도 73% 놀고 있다. 성능을 올리는 순서와 각 단계의
+> 이득·비용·위험은 **`docs/vision/throughput.md`**에 정리했다. 카메라나 DPU부터
+> 손대자는 제안은 거의 항상 틀렸다.
+
 ---
 
 ## 부록: 알려진 placeholder / TODO

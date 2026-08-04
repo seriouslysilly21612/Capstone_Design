@@ -68,7 +68,7 @@ Node parameters live in `system_bringup_pkg/config/*.yaml` (one per node). Custo
 - **Preprocess = LUT**, **postprocess = background pre-filter** — both verified **bit-identical** to the naive version, large speedups.
 - **Callback pipelining**: the subscription callback only stores the newest frame; a worker thread consumes frames back-to-back.
 - **3D = single-point reverse projection** on raw depth (`align_depth` OFF); only the bbox-center pixel is matched to its depth pixel.
-- Throughput ceiling is **camera supply rate** (realsense single-thread), not APU compute.
+- **Throughput is set by ONE place: the detector's worker loop**, as `max(camera supply 33.3 ms, processing ~43 ms, the process_period_sec gate 45 ms)` rounded UP to the next color-frame arrival → 62.9 ms = 15.3 Hz. The gate is the only binding constraint today; the camera supplies 29.4 Hz and the DPU is 73% idle. The 15 Hz cap is **deliberate** (see the rationale comment in `vitis_ai_detector.yaml`), decided when the target was static objects. **If asked to improve throughput, read `docs/vision/throughput.md` first and propose its §4 ladder in order** — starting with the camera or the DPU is almost always wrong. (The older claim "ceiling is camera supply rate" was true only while `align_depth` was on and throttled the camera to 12 Hz.)
 - Build note: `vitis_ai_detector_pkg` is editable-installed (egg-link → src is live); `target_3d_pkg` needs `colcon build --packages-select target_3d_pkg --symlink-install` after edits. Config YAMLs are symlinked (live, no rebuild).
 
 ## User Level & Assumptions
