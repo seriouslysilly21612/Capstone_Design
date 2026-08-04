@@ -1,6 +1,7 @@
 import math
 import signal
 import time
+from collections import deque
 
 import numpy as np
 
@@ -150,6 +151,20 @@ def color_pixel_to_depth_pixel(
     return int(ui[j]), int(vi[j])
 
 
+def nearest_by_stamp(buf, capture_ns):
+    """Entry of buf [(stamp_ns, msg), ... oldest->newest] closest in time to
+    capture_ns. Falls back to the newest when there is no usable capture stamp
+    (capture_ns <= 0). Returns None on an empty buffer.
+
+    Pure function so it can be tested without ROS (test/test_depth_pick.py).
+    """
+    if not buf:
+        return None
+    if capture_ns <= 0:
+        return buf[-1]
+    return min(buf, key=lambda e: abs(e[0] - capture_ns))
+
+
 class PickTarget3DNode(Node):
     def __init__(self):
         super().__init__('pick_target_3d_node')
@@ -220,7 +235,22 @@ class PickTarget3DNode(Node):
         # ===== Runtime state =====
         # Depth arrives at stream rate but is consumed only at pick time —
         # store the raw msg and build a zero-copy numpy view lazily.
-        self.latest_depth_msg = None
+        #
+        # A short HISTORY, not just the newest frame: the detection for a color
+        # frame reaches this node ~106 ms later (p99 152 ms, A run 2026-07-31),
+        # by which time 2-3 newer depth frames have arrived. Taking the newest
+        # gave depth that was +52.6 ms ahead of the color capture (p50; spread
+        # -100..+119 ms). Picking the frame nearest the capture instant instead
+        # removes that bias at ZERO added latency — the match is always already
+        # in the past, so we look backward and never wait for it.
+        # Pruned by AGE, not by frame count: the depth rate is a config choice
+        # (15 or 30 fps), and a fixed maxlen silently halves the covered time
+        # span when the rate doubles. 800 ms covers the worst arrival seen so
+        # far (671 ms, A run) — a first sizing of 400 ms was too short and those
+        # picks found their match already evicted, so they took the OLDEST frame
+        # instead (skew +34..+556 ms, 2026-08-04 run).
+        self.depth_hist_ns = 800_000_000
+        self.depth_buf = deque()   # (stamp_ns, msg), oldest -> newest
         self._depth_view_checked = False
 
         # depth intrinsics
@@ -282,7 +312,12 @@ class PickTarget3DNode(Node):
     def depth_callback(self, msg: Image):
         # Store only — conversion/validation happens at pick time (~16 Hz),
         # not at depth stream rate.
-        self.latest_depth_msg = msg
+        stamp_ns = stamp_to_ns(msg.header.stamp)
+        self.depth_buf.append((stamp_ns, msg))
+        if stamp_ns > 0:
+            cutoff = stamp_ns - self.depth_hist_ns
+            while len(self.depth_buf) > 1 and self.depth_buf[0][0] < cutoff:
+                self.depth_buf.popleft()
 
     def depth_msg_to_view(self, msg):
         """Zero-copy numpy view of a depth Image msg + meters-per-unit scale.
@@ -378,26 +413,31 @@ class PickTarget3DNode(Node):
         out.y = 0.0
         out.z = 0.0
 
+        # Bound before the first early return so every _emit below can report
+        # which depth frame was (or would have been) used.
+        depth_msg = None
+
         if not msg.target_valid:
-            self._emit(out, capture_stamp, compute_start_ns, in_age)
+            self._emit(out, capture_stamp, compute_start_ns, in_age, depth_msg)
             return
 
-        depth_msg = self.latest_depth_msg
+        entry = nearest_by_stamp(self.depth_buf, stamp_to_ns(capture_stamp))
+        depth_msg = entry[1] if entry is not None else None
         if depth_msg is None:
             self.log_warn_throttled('no_depth_image', 'No depth image yet')
-            self._emit(out, capture_stamp, compute_start_ns, in_age)
+            self._emit(out, capture_stamp, compute_start_ns, in_age, depth_msg)
             return
 
         if not self.intrinsics_ready():
             self.log_warn_throttled('no_intrinsics', 'No camera intrinsics yet')
-            self._emit(out, capture_stamp, compute_start_ns, in_age)
+            self._emit(out, capture_stamp, compute_start_ns, in_age, depth_msg)
             return
 
         if self.R_dc is None:
             self.log_warn_throttled(
                 'no_extrinsics', 'No depth->color extrinsics yet'
             )
-            self._emit(out, capture_stamp, compute_start_ns, in_age)
+            self._emit(out, capture_stamp, compute_start_ns, in_age, depth_msg)
             return
 
         depth_img, eff_scale = self.depth_msg_to_view(depth_msg)
@@ -406,7 +446,7 @@ class PickTarget3DNode(Node):
                 'bad_depth_encoding',
                 f'Unsupported depth encoding: {depth_msg.encoding}',
             )
-            self._emit(out, capture_stamp, compute_start_ns, in_age)
+            self._emit(out, capture_stamp, compute_start_ns, in_age, depth_msg)
             return
 
         if not self._depth_view_checked:
@@ -454,7 +494,7 @@ class PickTarget3DNode(Node):
             self.log_warn_throttled(
                 'no_valid_depth', 'No valid depth for bbox center (reverse proj)'
             )
-            self._emit(out, capture_stamp, compute_start_ns, in_age)
+            self._emit(out, capture_stamp, compute_start_ns, in_age, depth_msg)
             return
 
         ui, vi = found
@@ -463,7 +503,7 @@ class PickTarget3DNode(Node):
             self.log_warn_throttled(
                 'no_valid_depth_patch', 'No valid depth in patch around match'
             )
-            self._emit(out, capture_stamp, compute_start_ns, in_age)
+            self._emit(out, capture_stamp, compute_start_ns, in_age, depth_msg)
             return
 
         # 3D point in the DEPTH optical frame.
@@ -478,7 +518,7 @@ class PickTarget3DNode(Node):
         out.y = float(point[1])
         out.z = float(point[2])
 
-        self._emit(out, capture_stamp, compute_start_ns, in_age)
+        self._emit(out, capture_stamp, compute_start_ns, in_age, depth_msg)
 
     def get_depth_m_from_patch(self, depth_img, u, v, encoding):
         r = self.patch_radius
@@ -507,22 +547,32 @@ class PickTarget3DNode(Node):
             return None
         return z_m
 
-    def _emit(self, out, capture_stamp, compute_start_ns, in_age):
+    def _emit(self, out, capture_stamp, compute_start_ns, in_age, depth_msg=None):
         """Set capture_stamp, record one performance row, publish. Every publish
-        path routes through here so the CSV has one row per pick_target."""
+        path routes through here so the CSV has one row per pick_target.
+
+        depth_msg is the frame this pick actually used — the skew column has to
+        measure THAT one, not whatever arrived since (which is what reading
+        latest_depth_msg here used to do)."""
         out.capture_stamp = capture_stamp
         if out.depth_valid:
             self.depth_valid_out += 1
         if self.metrics.enabled:
             now_ns = self.get_clock().now().nanoseconds
             compute_ms = (time.perf_counter_ns() - compute_start_ns) / 1e6
+            csn = stamp_to_ns(capture_stamp)
             skew = None
-            dmsg = self.latest_depth_msg
-            if dmsg is not None:
-                dsn = stamp_to_ns(dmsg.header.stamp)
-                csn = stamp_to_ns(capture_stamp)
+            if depth_msg is not None:
+                dsn = stamp_to_ns(depth_msg.header.stamp)
                 if dsn > 0 and csn > 0:
                     skew = (dsn - csn) / 1e6  # signed: depth frame vs color capture
+            # What the pre-2026-08-04 'newest depth' policy would have given,
+            # measured in the SAME run: the two columns are the built-in A/B for
+            # the nearest-frame change, and |nearest| <= |latest| must always
+            # hold (the newest frame is one of the candidates min() sees).
+            skew_latest = None
+            if self.depth_buf and csn > 0:
+                skew_latest = (self.depth_buf[-1][0] - csn) / 1e6
             self.metrics.add({
                 'capture_sec': capture_stamp.sec,
                 'capture_nanosec': capture_stamp.nanosec,
@@ -530,6 +580,7 @@ class PickTarget3DNode(Node):
                 'target3d_compute_ms': _round(compute_ms),
                 'target3d_out_age_ms': _round(age_ms(now_ns, capture_stamp)),
                 'depth_vs_color_skew_ms': _round(skew),
+                'skew_if_latest_ms': _round(skew_latest),
                 'depth_valid': int(out.depth_valid),
             })
         self.target_3d_pub.publish(out)
