@@ -72,12 +72,25 @@ if kill -0 "$LPID" 2>/dev/null; then
     echo "KILL 승급(그룹)"; kill -KILL -- "-$LPID" 2>/dev/null; sleep 2
 fi
 wait "$LPID" 2>/dev/null
-# 고아 노드 잔존 확인 — 있으면 다음 run 을 오염시키므로 반드시 정리
-strays=$(pgrep -f "[r]ealsense2_camera_node|[v]itis_ai_detector_node|[p]ick_logic|[p]ick_target_3d_node|[p]ick_target_base_node|[v]itis_ai_worker_yolo")
+# 고아 노드 잔존 확인 — 있으면 다음 run 을 오염시키므로 반드시 정리.
+# 우리 프로세스 그룹은 제외한다: pgrep -f 는 커맨드라인에 노드 "파일명"만 들어
+# 있어도 잡아서, 예컨대 'flake8 ... pick_target_3d_node.py && ab_one_run.sh' 로
+# 이 스크립트를 띄운 부모 셸을 죽였다(2026-08-04 실증, run 이 exit 144 로 끝남).
+# 위 set -m 덕에 진짜 노드들은 launch 의 그룹(LPID)에 있고 우리 그룹에는 절대
+# 없으므로, PGID 비교 하나로 조상도 자기 서브셸도 한꺼번에 걸러진다.
+NODE_PAT="[r]ealsense2_camera_node|[v]itis_ai_detector_node|[p]ick_logic|[p]ick_target_3d_node|[p]ick_target_base_node|[v]itis_ai_worker_yolo"
+MYPG=$(ps -o pgid= -p $$ | tr -d ' ')
+find_strays() {
+    pgrep -f "$NODE_PAT" | while read -r pid; do
+        pg=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
+        [ -n "$pg" ] && [ "$pg" != "$MYPG" ] && echo "$pid"
+    done
+}
+strays=$(find_strays)
 if [ -n "$strays" ]; then
     echo "고아 프로세스 정리: $strays"
     kill -TERM $strays 2>/dev/null; sleep 8
-    strays2=$(pgrep -f "[r]ealsense2_camera_node|[v]itis_ai_detector_node|[p]ick_logic|[p]ick_target_3d_node|[p]ick_target_base_node|[v]itis_ai_worker_yolo")
+    strays2=$(find_strays)
     [ -n "$strays2" ] && { kill -KILL $strays2 2>/dev/null; sleep 2; }
 fi
 
