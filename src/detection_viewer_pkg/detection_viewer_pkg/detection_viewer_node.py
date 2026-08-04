@@ -2,8 +2,25 @@
 """Desktop-side bbox overlay viewer for the KV260 perception pipeline.
 
 Runs on the DESKTOP, not the board. Subscribes to the board's compressed color
-stream and /detections, joins them by exact header stamp, draws the boxes, and
-shows the result. The board only compresses; all drawing happens here.
+stream and /detections, draws the boxes, and shows the result. The board only
+compresses; all drawing happens here.
+
+Two render modes — the video and the boxes arrive at DIFFERENT rates (color
+30 fps, detections ~15 Hz), and you cannot have both smooth video and
+frame-exact boxes, because a frame's own boxes only exist ~107 ms after it was
+captured:
+
+  smooth (default)  render every color frame -> 30 fps, near-live video, with
+                    the newest boxes available. Boxes therefore lag the picture
+                    by ~107 ms (invisible on a static pick scene; on a fast
+                    moving object the box trails it).
+  --sync            render only frames whose EXACT detection arrived -> 15 fps,
+                    ~107 ms behind live, boxes pixel-exact on their own frame.
+                    This is the mode that verified bbox<->frame alignment
+                    (2026-07-16); keep using it for that check.
+
+Either way the board sends the same 30 fps JPEG stream and pays the same cost —
+smooth mode simply stops throwing half the decoded frames away.
 
 Why not draw on the board: the detector's own overlay path costs ~44 ms/frame on
 top of a 37.6 ms detect, which busts the 66.6 ms budget for 15 Hz. Drawing here
@@ -56,12 +73,43 @@ def stamp_key(header):
     return (header.stamp.sec, header.stamp.nanosec)
 
 
+def stamp_s(key):
+    return key[0] + key[1] * 1e-9
+
+
+def fresh_boxes(frame_key, dets, max_age_s):
+    """Which boxes to draw on the frame at frame_key -> (dets_or_None, age_s).
+
+    (None, None) means nothing is fresh enough to draw: either no detection has
+    arrived yet, or the newest one is older than max_age_s relative to this
+    frame — a stalled detector must go visibly blank, not leave its last boxes
+    frozen on a live picture. Pure function so it is testable without ROS.
+    """
+    if dets is None:
+        return None, None
+    age = stamp_s(frame_key) - stamp_s(stamp_key(dets.header))
+    if age > max_age_s:
+        return None, None
+    return dets, age
+
+
 class DetectionViewer(Node):
     def __init__(self, image_topic, detections_topic, buffer_len, window,
-                 fps_csv="", fps_dir="~/pp_ws/viewer_ws/fps_log"):
+                 fps_csv="", fps_dir="~/pp_ws/viewer_ws/fps_log",
+                 sync=False, max_box_age_s=0.5):
         super().__init__("detection_viewer_node")
         self.window = window
         self.buffer_len = buffer_len
+        # smooth (default): every color frame is rendered as it lands, carrying
+        # the newest boxes we have. sync: only exact (image, detection) pairs.
+        self.smooth = not sync
+        # Boxes older than this relative to the frame being shown are dropped
+        # rather than drawn. Without it, a stalled detector (or a crashed board)
+        # would leave the last boxes frozen on screen looking live.
+        self.max_box_age_s = max_box_age_s
+        self.last_dets = None      # newest DetectionArray (smooth mode)
+        self.n_drawn = 0           # frames rendered (smooth mode)
+        self.n_nobox = 0           # rendered with boxes suppressed as too old
         # The join is two-sided because the two streams race. A detection is
         # published ~37 ms after its frame was captured and then crosses the
         # network; its compressed twin is encoded and crosses the network on an
@@ -125,6 +173,12 @@ class DetectionViewer(Node):
         cv2.namedWindow(self.window, cv2.WINDOW_NORMAL)
         self.get_logger().info(f"image:      {image_topic}")
         self.get_logger().info(f"detections: {detections_topic}")
+        self.get_logger().info(
+            "mode: smooth — every color frame is drawn (~30 fps), boxes are the "
+            f"newest available (they lag ~100 ms; hidden past {self.max_box_age_s:.1f}s). "
+            "Use --sync for 15 fps frame-exact boxes."
+            if self.smooth else
+            "mode: sync — only exact (image, detection) pairs are drawn (~15 fps).")
         self.get_logger().info("waiting for both topics... (q or ESC in the window to quit)")
 
     def on_image(self, msg):
@@ -134,10 +188,26 @@ class DetectionViewer(Node):
             self.get_logger().warn("imdecode failed", throttle_duration_sec=5.0)
             return
         key = stamp_key(msg.header)
+        self.n_img += 1
+
+        if self.smooth:
+            # Draw immediately — never wait for this frame's own detection,
+            # which is still ~107 ms away and would cost both the frame rate
+            # and the liveness.
+            if self.last_rendered is not None and key <= self.last_rendered:
+                self.n_stale += 1   # out-of-order/duplicate arrival
+                return
+            self.last_rendered = key
+            dets, age = fresh_boxes(key, self.last_dets, self.max_box_age_s)
+            if dets is None and self.last_dets is not None:
+                self.n_nobox += 1
+            self.n_drawn += 1
+            self.render(frame, dets, age)
+            return
+
         self.frames[key] = frame
         while len(self.frames) > self.buffer_len:
             self.frames.popitem(last=False)
-        self.n_img += 1
 
         # The other half of the join: a detection may already be waiting on this
         # exact frame.
@@ -148,6 +218,9 @@ class DetectionViewer(Node):
 
     def on_detections(self, msg):
         self.n_det += 1
+        if self.smooth:
+            self.last_dets = msg
+            return
         key = stamp_key(msg.header)
         frame = self.frames.get(key)
         if frame is None:
@@ -169,8 +242,10 @@ class DetectionViewer(Node):
         self.last_rendered = key
         self.render(frame.copy(), msg)
 
-    def render(self, frame, msg):
-        for det in msg.detections:
+    def render(self, frame, msg, box_age=None):
+        # msg None = we have no boxes fresh enough to honestly draw.
+        dets = msg.detections if msg is not None else []
+        for det in dets:
             # Coords are already in this frame's pixel space — no scaling.
             xmin = int(round(det.center_x - det.width / 2.0))
             ymin = int(round(det.center_y - det.height / 2.0))
@@ -185,7 +260,12 @@ class DetectionViewer(Node):
             cv2.putText(frame, label, (xmin + 2, ytop + th),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
 
-        hud = f"{len(msg.detections)} det  {frame.shape[1]}x{frame.shape[0]}"
+        hud = f"{len(dets)} det  {frame.shape[1]}x{frame.shape[0]}"
+        if box_age is not None:
+            # How far the boxes lag the picture — the honest cost of smooth mode.
+            hud += f"  box +{box_age * 1000:.0f}ms"
+        elif msg is None and self.smooth:
+            hud += "  NO FRESH BOXES"
         cv2.putText(frame, hud, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                     (255, 255, 255), 1, cv2.LINE_AA)
 
@@ -199,7 +279,7 @@ class DetectionViewer(Node):
                 self.fps_ema = inst if self.fps_ema is None else 0.2 * inst + 0.8 * self.fps_ema
                 if self.fps_csv_path:
                     self.fps_samples.append(
-                        (now - self.first_render_t, inst, self.fps_ema, len(msg.detections)))
+                        (now - self.first_render_t, inst, self.fps_ema, len(dets)))
         else:
             self.first_render_t = now
         self.last_render_t = now
@@ -229,6 +309,14 @@ class DetectionViewer(Node):
         elif self.n_det == 0:
             self.get_logger().warn("images but NO detections — is my_interfaces built from "
                                    "the SAME commit as the board?")
+        if self.smooth:
+            self.get_logger().info(
+                f"img={self.n_img} det={self.n_det} drawn={self.n_drawn} "
+                f"(smooth: every frame) reorder_skip={self.n_stale} "
+                f"stale_boxes_hidden={self.n_nobox}")
+            self.n_img = self.n_det = self.n_drawn = 0
+            self.n_stale = self.n_nobox = 0
+            return
         drawn = self.n_hit + self.n_late
         total = drawn + self.n_drop + self.n_stale
         rate = (100.0 * drawn / total) if total else 0.0
@@ -299,11 +387,20 @@ def main():
                     help="directory for the auto-named per-run FPS CSV (logging is always on)")
     ap.add_argument("--fps-csv", default="",
                     help="exact CSV path; overrides --fps-dir auto-naming")
+    ap.add_argument("--sync", action="store_true",
+                    help="render only exact (image, detection) pairs: 15 fps and "
+                         "~107 ms behind live, but boxes are exact on their own "
+                         "frame. Use for bbox<->frame alignment checks. Default "
+                         "is smooth 30 fps with the newest boxes.")
+    ap.add_argument("--max-box-age", type=float, default=0.5,
+                    help="smooth mode: hide boxes older than this many seconds "
+                         "relative to the displayed frame (default 0.5)")
     args, ros_args = ap.parse_known_args()
 
     rclpy.init(args=ros_args)
     node = DetectionViewer(args.image_topic, args.detections_topic, args.buffer,
-                           args.window, fps_csv=args.fps_csv, fps_dir=args.fps_dir)
+                           args.window, fps_csv=args.fps_csv, fps_dir=args.fps_dir,
+                           sync=args.sync, max_box_age_s=args.max_box_age)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

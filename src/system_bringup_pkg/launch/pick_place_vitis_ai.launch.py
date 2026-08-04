@@ -13,16 +13,18 @@ different bringup — it needs a subscriber:
     stream is encoded LAZILY — image_transport skips the encode while nothing
     subscribes to it, so it costs the board ZERO until a viewer attaches.
   * To watch: run detection_viewer_pkg/detection_viewer_node on the DESKTOP. It
-    subscribes to that compressed topic + /detections, joins them by header
-    stamp, and draws. The board only compresses; all drawing is on the desktop.
+    subscribes to that compressed topic + /detections and draws. The board only
+    compresses; all drawing is on the desktop.
     Full procedure/gates: docs/vision/desktop_viewer_plan.md
 
 Color stays at 30 fps here (the production pick path wants fresh frames — see
-realsense_pick_place.yaml). The detector caps at 15 Hz and the viewer renders on
-detection arrival, so while you watch, ~half the 30 fps JPEG encodes go unused —
-a monitoring-only cost that is zero the moment you close the viewer. Do NOT try
-to see boxes by flipping publish_overlay on the board: board-side drawing is
-~44 ms/frame on top of a ~37.6 ms detect and silently busts the 15 Hz budget.
+realsense_pick_place.yaml). The detector caps at 15 Hz, but the viewer draws
+EVERY color frame (~30 fps) carrying the newest boxes, so none of the JPEG
+encodes go to waste; pass --sync to the viewer for the old 15 Hz frame-exact
+join instead. The board sends the same stream either way, and that cost is zero
+the moment you close the viewer. Do NOT try to see boxes by flipping
+publish_overlay on the board: board-side drawing is ~44 ms/frame on top of a
+~37.6 ms detect and silently busts the 15 Hz budget.
 
 METRICS (off by default). Add `metrics:=true` to record everything in one shot:
     ros2 launch system_bringup_pkg pick_place_vitis_ai.launch.py metrics:=true
