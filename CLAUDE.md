@@ -33,8 +33,11 @@ ros2 launch system_bringup_pkg pick_place_vitis_ai.launch.py
 To watch detections as a bbox overlay on the desktop (verified 2026-07-16;
 launches merged 2026-07-20), keep this same launch running and run
 `detection_viewer_pkg/detection_viewer_node` on the desktop — there is no
-separate viewing launch. The board only JPEG-compresses; the desktop joins by
-header stamp and draws. The compressed topic encodes LAZILY (only while the
+separate viewing launch. The board only JPEG-compresses; the desktop draws.
+By default the viewer renders EVERY color frame (~30 fps) with the newest boxes
+(which update at ~15 Hz, so they lag the picture ~107 ms); `--sync` restores the
+old 15 fps frame-exact stamp join, which is the mode to use when verifying
+bbox↔frame alignment. The compressed topic encodes LAZILY (only while the
 viewer subscribes), so it adds nothing to the board when nobody is watching.
 Do NOT enable `publish_overlay` to get this — board-side drawing is 44 ms/frame
 on top of a 37.6 ms detect and silently breaks the 15 Hz contract.
@@ -106,6 +109,7 @@ When selecting models or approaches for the vision pipeline:
 - **FPGA / DPU**: KV260 `kv260-smartcam` overlay active; detection runs on the DPU (DPUCZDX8G_ISA1_B3136) via a long-running Python VART worker process.
 - **No RPU firmware**: Placeholder exists; FreeRTOS and robot control not yet implemented.
 - **RealSense D435i depth**: raw (unaligned) depth, 16UC1, 0.001 scale. `align_depth.enable` is OFF — full-frame alignment was removed (it pegged one A53 core and halved throughput). 3D uses **single-point reverse projection**: the color bbox-center pixel is matched to its depth pixel via depth/color intrinsics + depth→color extrinsics (rs2_project_color_pixel_to_depth_pixel). Output is in `camera_depth_optical_frame`.
+- **Depth/color time alignment (2026-08-04, for MOVING objects)**: `enable_sync: true` + depth at 30 fps (same as color) so every color frame has a same-timestamp depth partner, AND `pick_target_3d_node` keeps an 800 ms depth history and picks the frame **nearest the color capture stamp** (`nearest_by_stamp`). Both halves are required — the detection arrives ~90 ms late, so the *newest* depth is ~3 frames past the partner. Measured: skew |mean| 28.5 → **4.3 ms**, 89% exactly 0.0, for +0.18 cores and no latency/throughput change (`evidence/metrics/runs/sync30_compare_20260804.md`). Do NOT "simplify" the history back to a single latest frame — that alone puts skew back to 36 ms.
 - **ROS2 message protocol**: Custom `Detection`, `DetectionArray`, `PickTarget`, `PickTarget3D` types in `my_interfaces`. The detector↔worker boundary is a model-agnostic JSON contract, so swapping the model leaves the node/pipeline/3D/downstream unchanged.
 - **Operator level**: Unified bringup launch `ros2 launch system_bringup_pkg pick_place_vitis_ai.launch.py` starts the full perception pipeline.
 
@@ -147,7 +151,7 @@ If uncertain or sources disagree: state the disagreement, cite both sources, and
 - **OS**: Ubuntu 22.04 LTS (or PetaLinux if required)
 - **ROS2**: Humble
 - **Accelerator**: `kv260-smartcam` overlay; DPU `DPUCZDX8G_ISA1_B3136` (fingerprint `0x101000016010406`), Vitis-AI runtime/library 2.5.0. Boot auto-load via a `kv260-smartcam.service` systemd unit.
-- **Camera**: realsense2_camera v4.57.7 / librealsense 2.57.7; D435i FW **5.17.0.10**; color & depth both 848×480×30, `align_depth` OFF.
+- **Camera**: realsense2_camera v4.57.7 / librealsense 2.57.7; D435i FW **5.17.0.10**; color & depth both 848×480×30, `enable_sync` **ON**, `align_depth` OFF.
   - ⚠️ **Do not use FW 5.16.0.1** — RGB frames stop after tens of seconds of streaming (`docs/history.md` §13 has the split-diagnosis method and the fix).
 - **Current model**: YOLOv3-tiny 6-class INT8 — apple / orange / banana / tennis_ball / mustard_bottle / person. Ships inside the package at `src/vitis_ai_detector_pkg/models/yolov3_tiny_7class.xmodel` (the `7class` in the filename is a leftover from the initial 7-class run; peach was dropped at D13. `decode_meta.json`, which must stay in the same directory, is authoritative).
 - **RT kernel**: `5.15.199-rt91-rt-kv260c` — production, DEBUG off, radix + zocl fixes applied. Needed only for the EtherCAT track; the vision pipeline runs fine on the stock kernel.
