@@ -2,29 +2,35 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://relaxng.org/ns/structure/1.0"?>
 <package format="3">
   <name>raon_operator_gui</name>
-  <version>0.0.0</version>
-  <description>Desktop PyQt5 operator console for the KV260 pick&amp;place pipeline.
-  Runs on the desktop, not the board. Phase 1 is observe-only: it embeds the
-  bbox-overlay video (same two-sided stamp join as detection_viewer_pkg) plus
-  the live detections and the base_link pick target the robot app consumes.
+  <version>0.1.0</version>
+  <description>Desktop operator station for the KV260 pick&amp;place pipeline.
+  Runs on the desktop, not the board. ONE Qt window (C++): the bbox-overlay
+  video with resolution/FPS, an embedded RViz RobotModel driven by
+  /joint_states via robot_state_publisher, and the robot app's terminal keys
+  as buttons on /operator_key — each button enabled only when DoInput's own
+  guards would accept the key (/robot_state).
   Run it INSTEAD OF detection_viewer_node — two subscribers double the board's
   JPEG egress.</description>
   <maintainer email="kww642@mju.ac.kr">ubuntu</maintainer>
   <license>MIT</license>
 
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>my_interfaces</exec_depend>
-  <exec_depend>python3-opencv</exec_depend>
-  <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-pyqt5</exec_depend>
+  <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <test_depend>ament_copyright</test_depend>
-  <test_depend>ament_flake8</test_depend>
-  <test_depend>ament_pep257</test_depend>
-  <test_depend>python3-pytest</test_depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>my_interfaces</depend>
+  <depend>rviz_common</depend>
+  <depend>rviz_rendering</depend>
+  <depend>rviz_default_plugins</depend>
+  <depend>libopencv-dev</depend>
+  <depend>qtbase5-dev</depend>
+
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
 
   <export>
-    <build_type>ament_python</build_type>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>
