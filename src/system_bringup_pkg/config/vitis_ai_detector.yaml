@@ -18,6 +18,10 @@ vitis_ai_detector_node:
     detector_mode: "worker"
     worker_log_path: ""
     worker_softmax: "auto"           # yolo worker는 --softmax를 받되 무시 (호환용)
+    # 프레임을 stdin pipe(복사 3~4회, ipc ~9-12 ms) 대신 /dev/shm mmap(memcpy
+    # 1회)으로 worker에 전달 (2026-08-05, throughput.md §4 방법 0).
+    # false = 구 pipe 경로 (A/B·폴백용).
+    worker_shm: true
     # letterbox를 worker가 직접 수행 → node는 원본 프레임을 그대로 전달해야 함
     send_resized_input: false
     input_topic: "/camera/camera/color/image_raw"
@@ -25,14 +29,35 @@ vitis_ai_detector_node:
     overlay_topic: "/vitis_ai_detector/overlay"
     overlay_width: 480
     overlay_height: 360
-    # Cap detection to every 2nd camera frame = stable 15 Hz (2026-07-14 CPU
-    # phase 1): the letterbox speedup raised the uncapped rate to ~19 Hz, which
-    # just spends the saved CPU on extra downstream frames; Gate6 target is
-    # 15 Hz. The gate must sit safely INSIDE one camera frame period and the
-    # next (33.3..66.6 ms) — 0.062 was borderline (arrival jitter made it skip
-    # to 3-frame cadence, ~13.8 Hz mean). 0.045 locks the 2-frame cadence.
-    # Set 0.0 to uncap (max throughput).
-    process_period_sec: 0.045
+    # Minimum interval between the START of two detections. A frame that fails
+    # this gate is DISCARDED and the worker waits for the next arrival — so the
+    # gate does not produce its nominal period, it produces "the first color
+    # frame arriving after it". That rounding to the 33.3 ms arrival grid is
+    # what makes the exact value matter so much.
+    #
+    # 0.045 (2026-07-14 .. 2026-08-05): a deliberate 15 Hz cap. Uncapped was
+    #   ~19 Hz then and only spent the CPU saved by the letterbox speedup on
+    #   extra downstream frames; Gate6 targeted 15 Hz. 0.045 sits between one
+    #   frame period and two (33.3..66.6 ms), locking the 2-frame cadence
+    #   (0.062 was borderline — arrival jitter drifted it to 3 frames, 13.8 Hz).
+    #
+    # 0.030 (2026-08-05): the premise changed — the target is now MOVING
+    #   objects, where the update interval drives tracking quality, so the
+    #   15 Hz cap is no longer the right trade. Processing is ~43 ms, so a gate
+    #   below that never binds: period = processing = ~43 ms -> ~23 Hz
+    #   (65 -> 43 ms update interval). Expect roughly +0.5 cores as everything
+    #   downstream runs 1.5x (1.41 -> ~1.9 of the 3 cores vision may use;
+    #   CPU3 is RT-isolated and off limits).
+    #   Why 0.030 and not 0.033: it must sit SAFELY inside the first frame
+    #   period, the mirror image of the 0.062 lesson. At 0.033 the margin
+    #   against arrival jitter is 0.3 ms, so if processing ever dropped below
+    #   33 ms the gate would start skipping to a 2-frame cadence again.
+    #   Set 0.0 to remove the gate entirely (no backstop if processing ever
+    #   gets very fast). Revert to 0.045 to restore the 15 Hz cap.
+    # Measured baseline before this change: evidence/metrics/runs/
+    #   baseline_sync30_20260805 (43.2 ms processing, 62.9 ms period, 15.3 Hz).
+    # Rationale + the ladder for going past ~23 Hz: docs/vision/throughput.md
+    process_period_sec: 0.030
     timeout_sec: 10.0
     worker_startup_timeout_sec: 30.0
     publish_empty_detections: true

@@ -30,6 +30,13 @@ import numpy as np
 import xir
 import vart
 
+# This file runs BOTH as a plain script (node spawns it by path — sys.path[0]
+# is this directory) and, in tests, as a package module. Support both.
+try:
+    from vitis_ai_detector_pkg.shm_frame import ShmFrameReader
+except ImportError:
+    from shm_frame import ShmFrameReader
+
 
 DEFAULT_THRESHOLD = 0.50
 CLASS_THRESHOLDS_BY_NAME = {
@@ -391,6 +398,7 @@ def main():
     })
     worker.log("ready sent")
 
+    shm_reader = ShmFrameReader()
     while True:
         line = sys.stdin.buffer.readline()
         if not line:
@@ -399,16 +407,24 @@ def main():
 
         try:
             request = json.loads(line.decode("utf-8"))
-            data = read_exact(sys.stdin.buffer, int(request["data_len"]))
-            if data is None:
-                worker.log("request data missing")
-                break
-
             height = int(request["height"])
             width = int(request["width"])
             channels = int(request["channels"])
-            image = np.frombuffer(data, dtype=np.uint8).reshape(
-                (height, width, channels))
+            shm_path = request.get("shm_path")
+            if shm_path:
+                # Frame is in the node's /dev/shm mapping — read-only numpy
+                # view, zero copies here. Safe to use in place: the node never
+                # writes the buffer while it waits for our response.
+                image = shm_reader.view(
+                    shm_path, height * width * channels
+                ).reshape((height, width, channels))
+            else:
+                data = read_exact(sys.stdin.buffer, int(request["data_len"]))
+                if data is None:
+                    worker.log("request data missing")
+                    break
+                image = np.frombuffer(data, dtype=np.uint8).reshape(
+                    (height, width, channels))
 
             source_width = int(request.get("source_width", width))
             source_height = int(request.get("source_height", height))

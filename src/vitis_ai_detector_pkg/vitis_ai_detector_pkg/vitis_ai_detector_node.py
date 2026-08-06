@@ -23,6 +23,8 @@ from sensor_msgs.msg import CompressedImage, Image
 
 from my_interfaces.msg import Detection, DetectionArray
 
+from vitis_ai_detector_pkg.shm_frame import ShmFrameWriter
+
 
 BOX_COLORS = {
     "car": (0, 255, 0),
@@ -105,6 +107,10 @@ class VitisAiDetectorNode(Node):
         self.declare_parameter("detector_mode", "worker")
         self.declare_parameter("worker_log_path", "")
         self.declare_parameter("worker_softmax", "auto")
+        # Frame handoff to the worker via a /dev/shm mmap (one memcpy) instead
+        # of the stdin pipe (3-4 copies, ipc_overhead_ms ~9-12). false = the
+        # old inline-bytes path, kept for A/B and as a fallback (shm_frame.py).
+        self.declare_parameter("worker_shm", True)
         self.declare_parameter("send_resized_input", True)
         self.declare_parameter("input_topic", "/camera/camera/color/image_raw")
         self.declare_parameter("output_topic", "/detections")
@@ -137,6 +143,13 @@ class VitisAiDetectorNode(Node):
         self.detector_mode = str(self.get_parameter("detector_mode").value)
         self.worker_log_path = self.get_parameter("worker_log_path").value
         self.worker_softmax = self.get_parameter("worker_softmax").value
+        # pid in the name so a stale file from a killed run is never shared;
+        # unlinked in main()'s finally. NEVER unlink mid-run (inode warning in
+        # shm_frame.py — the worker would keep reading the dead inode).
+        self.shm_writer = (
+            ShmFrameWriter(f"/dev/shm/vitis_ai_frame_{os.getpid()}")
+            if bool(self.get_parameter("worker_shm").value) else None
+        )
         self.send_resized_input = bool(
             self.get_parameter("send_resized_input").value
         )
@@ -260,6 +273,7 @@ class VitisAiDetectorNode(Node):
             "Low-latency policy: sensor QoS depth=1, latest frame only, "
             f"process_period_sec={self.process_period_sec:.3f}, "
             f"send_resized_input={self.send_resized_input}, "
+            f"worker_shm={self.shm_writer is not None}, "
             f"publish_overlay={self.publish_overlay}, "
             f"publish_compressed_overlay={self.publish_compressed_overlay}"
         )
@@ -360,6 +374,9 @@ class VitisAiDetectorNode(Node):
             pre_ms = wt.get("pre_ms")
             dpu_ms = wt.get("dpu_ms")
             post_ms = wt.get("post_ms")
+            # pipe mode: 3-4 full frame copies through a 64 KB pipe (~9-12 ms).
+            # shm mode (worker_shm, 2026-08-05): one memcpy into /dev/shm +
+            # JSON + wakeups — expect ~1-3 ms.
             ipc_overhead_ms = (
                 worker_call_ms - worker_ms if worker_ms is not None else None
             )
@@ -610,8 +627,19 @@ class VitisAiDetectorNode(Node):
         }
 
         try:
-            self.worker_process.stdin.write(json.dumps(request).encode("utf-8") + b"\n")
-            self.worker_process.stdin.write(worker_image.tobytes())
+            if self.shm_writer is not None:
+                # Frame goes through /dev/shm (one memcpy); the pipe carries
+                # only the JSON header. Write the buffer BEFORE the request —
+                # the worker reads it as soon as the request line lands.
+                self.shm_writer.write(worker_image)
+                request["data_len"] = 0
+                request["shm_path"] = self.shm_writer.path
+                self.worker_process.stdin.write(
+                    json.dumps(request).encode("utf-8") + b"\n")
+            else:
+                self.worker_process.stdin.write(
+                    json.dumps(request).encode("utf-8") + b"\n")
+                self.worker_process.stdin.write(worker_image.tobytes())
             self.worker_process.stdin.flush()
             response = self.read_worker_json("worker inference")
         except (BrokenPipeError, RuntimeError, subprocess.TimeoutExpired):
@@ -882,6 +910,8 @@ def main(args=None):
             node.save_metrics_csv()
             node.write_yield_summary()
             node.stop_worker()
+            if node.shm_writer is not None:
+                node.shm_writer.unlink()   # worker is gone — safe to drop the inode
             node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
