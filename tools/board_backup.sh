@@ -31,7 +31,9 @@ cat > "$TMP/state/RESTORE.md" <<'EOF'
 # 복원 절차 (요지 — 상세 근거는 ros2_ws docs/RAON-RT/merge.md)
 
 1. Kria Ubuntu 22.04 플래시, 사용자 ubuntu 생성.
-2. PC에 보관한 RT 커널 deb 설치 (linux-image/headers 5.15.199-rt91-rt-kv260c) 후 재부팅.
+2. PC에 보관한 RT 커널 deb 설치 (linux-image/headers 5.15.199-rt91-rt-kv260c-10) 후 재부팅.
+   ⚠️ deb 원본은 보드 ~/(SD와 함께 죽음)와 크로스컴파일한 PC 둘 다에 있어야 한다 —
+   백업 tar에는 크기(70MB) 때문에 안 들어간다. PC 보관 여부를 지금 확인할 것.
 3. 저장소 clone (경로 고정 — tar가 이 경로 안으로 파일을 덮어씀):
    git clone <RAON-RT-Revision> ~/RAON-RT-Revision  (branch kv260-merge)
    git clone <Capstone_Design>  ~/ros2_ws
@@ -41,6 +43,10 @@ cat > "$TMP/state/RESTORE.md" <<'EOF'
 5. sudo depmod -a && sudo flash-kernel   # 모듈 인덱스 + cmdline(image.fit) 재생성 → 재부팅
    재부팅 후 cat /proc/cmdline 이 state/cmdline.txt 와 같은지 확인.
 6. ROS2 Humble + 의존 apt 설치(ros2_ws CLAUDE.md 참조) → cd ~/ros2_ws && colcon build.
+   DPU 스택은 전부 apt 재설치 가능(2026-08-05 확인 — tar가 /etc/apt/sources.list.d 의
+   Xilinx PPA 목록을 복원함): sudo apt install vitis-ai-runtime xlnx-firmware-kv260-smartcam
+   realsense는 ros-humble-librealsense2 / ros-humble-realsense2-camera (ROS apt).
+   DPU 부팅 자동로드: tar가 복원한 유닛을 sudo systemctl enable kv260-smartcam.service
 7. RAON 앱 빌드: make -C ~/RAON-RT-Revision/App/Indy7   ("make clean" 금지 — merge.md 수칙)
    sudo bash ~/RAON-RT-Revision/tools/install_ecat_op_fifo.sh   # E34 chrt 1회 설치
 8. 검증: IgH 기동(ethercatctl/서비스, igh 메모리 참조) → run.sh → 'r,g' 스모크(servo-off)
@@ -78,6 +84,11 @@ ITEMS=(
   "etc/sudoers.d/ecat-op-fifo"
   "lib/systemd/system/ethercat.service"
   "usr/local/sbin/ecat-op-fifo"
+  # 6) DPU 부팅 자동로드 수제 유닛 + Xilinx PPA 소스 목록 (2026-08-05 점검에서
+  #    누락 발견 — 유닛은 수제 274B라 재플래시 이미지에 없고, PPA 목록은 재설치
+  #    가능성의 전제. vitis-ai-runtime 등 패키지 자체는 apt로 복구된다.)
+  "etc/systemd/system/kv260-smartcam.service"
+  "etc/apt/sources.list.d"
 )
 
 EXIST=()
