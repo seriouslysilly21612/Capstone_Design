@@ -31,9 +31,11 @@ cat > "$TMP/state/RESTORE.md" <<'EOF'
 # 복원 절차 (요지 — 상세 근거는 ros2_ws docs/RAON-RT/merge.md)
 
 1. Kria Ubuntu 22.04 플래시, 사용자 ubuntu 생성.
-2. PC에 보관한 RT 커널 deb 설치 (linux-image/headers 5.15.199-rt91-rt-kv260c-10) 후 재부팅.
-   ⚠️ deb 원본은 보드 ~/(SD와 함께 죽음)와 크로스컴파일한 PC 둘 다에 있어야 한다 —
-   백업 tar에는 크기(70MB) 때문에 안 들어간다. PC 보관 여부를 지금 확인할 것.
+2. RT 커널 deb 설치 (linux-image/headers 5.15.199-rt91-rt-kv260c **리비전 -11**) 후 재부팅.
+   ⚠️ 반드시 -11 — -10과 커널 버전 문자열이 같아 헷갈리지만, -11이 07-20 ASIX
+   재빌드(usbnet/mii =m)라서 -10으로 깔면 AX88179B NIC(EtherCAT 경로)이 안 산다.
+   deb 보관처: ros2_ws repo의 recovery/ (2026-08-06 커밋) + 보드 ~/ + 크로스컴파일 PC.
+   백업 tar에는 크기(70MB) 때문에 안 들어간다.
 3. 저장소 clone (경로 고정 — tar가 이 경로 안으로 파일을 덮어씀):
    git clone <RAON-RT-Revision> ~/RAON-RT-Revision  (branch kv260-merge)
    git clone <Capstone_Design>  ~/ros2_ws
