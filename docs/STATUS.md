@@ -18,6 +18,20 @@
   1. **비전 (YOLO 교체)** — SSD ADAS stand-in → **YOLOv3-tiny 6-class**. 재학습·양자화·컴파일·보드 배치·**Gate 5(실물 top-down) 통과 = 6종 확정**. D14 apple 실물 재학습으로 **실물 apple 0.5→0.88**까지 해결 → **모델 교체(Gate 2~5) 완성**. 남은 건 Gate 6(풀 파이프라인)·Gate 7. ← §4
   2. **로봇 제어 (RT 커널 → EtherCAT → RPU)** — 3단계. **✅✅ 2026-07-15 RT 트랙 종결**. 두 커널 결함 모두 해결: (1) **radix-tree**(Ubuntu SAUCE local_lock revert, RT 충돌) 3파일 원복 → 부팅 위반 253→0; (2) **zocl KDS UAF**(`kds_core.c`의 submit-후-타임스탬프, DPU 파이프라인 크래시 원인) 순서교체 픽스. 최종 커널 = **`-rt-kv260c`(#10, DEBUG off + zocl 픽스) 현재 구동**. **zocl 재현검증**: 계측(330s)·프로덕션(200s+) 양쪽 Poison/Oops 0. **cyclictest(DEBUG off)**: idle Max 134 / **load Max 142µs(kv260b DEBUG-on 282→절반)** / 부하 중 위반 0. **EtherCAT 선결조건 전부 해제** — 남은 건 EtherCAT 단계의 3+1 격리 코어 실측뿐. 상세: **`rt_kernel_postmortem.md §12-8`**, `rt_patch.md §0/§4-4-2`. ← §5
 - **현재 물리 상태**: RealSense 카메라 재연결됨. **보드는 현재 프로덕션 RT 커널 `5.15.199-rt91-rt-kv260c`(#10)로 부팅됨(2026-07-15, realtime=1)** — zocl 픽스 포함, DPU 파이프라인 크래시 없이 정상 구동 검증됨. 순정 커널(`5.15.0-1070`)도 설치돼 있어 필요 시 `sudo flash-kernel --force 5.15.0-1070-xilinx-zynqmp && sudo reboot`로 전환. 비전 config는 YOLO로 전환됨, DPU 스택 정상.
+- **★ 2026-08-04/05 — 이동 물체 전환: depth 시간 정합 + throughput 상향**: 파이프라인 전제가
+  정적 pick → **움직이는 물체 추종**으로 변경되며 3종 개편. ① **depth-color 시간 정합**:
+  `enable_sync: true` + depth 15→30fps + 3D 노드가 최신 depth 대신 **capture_stamp 최근접
+  프레임 선택**(800ms 히스토리, `nearest_by_stamp`) → skew |평균| 52.5→**4.3ms**(89%가 정확히
+  0.0). 두 반쪽 모두 필수 — sync만 켜면 33.3ms(같은 런 대조열 `skew_if_latest_ms`로 실증).
+  align의 skew 0은 **align이 아니라 딸려온 sync의 효과**였음(재해석). ② **뷰어/GUI 영상
+  30fps**: 정확 조인 → 매 프레임 렌더+최신 bbox(0.5s age gate), 검증용 정확 조인은 `--sync`.
+  ③ **throughput 15.3→21.7Hz**: 병목은 카메라(29.4Hz 공급)도 DPU(73% 유휴)도 아닌
+  `process_period_sec: 0.045`(의도된 15Hz 캡, 전제가 정적 물체) → **0.030** + **worker IPC를
+  pipe→/dev/shm mmap**(`shm_frame.py`, ipc 13.4→4.65ms, CPU 증가 0). 게이트 단독은
+  rate↔신선도 맞바꿈(E2E +14ms)이었으나 shm이 이를 해소 — **0.030+shm이 구 0.045를 전 지표
+  지배**(신선도 p50 141 vs 146ms). 정본 **`docs/vision/throughput.md`**(성능 요청 시 §4 사다리
+  순서로 제안; 다음 카드 = 워커 파이프라이닝 pre‖DPU → 33.3ms 목표선), 실측
+  `evidence/metrics/runs/{sync30_compare_20260804,gate_ipc_20260805}.md`.
 - **★ 2026-07-14 새 발견 — RT 커널 + DPU = 커널 크래시(별개 이슈, radix와 무관)**: RT 커널(kv260b)에서 **DPU 비전 파이프라인을 처음 가동하자 ~30초 만에 zocl(Xilinx DPU 드라이버) 슬랩 손상으로 커널 Oops→시스템 프리즈→하드 재부팅** 발생. 레지스터 지문으로 SLUB freelist 손상 확정(`___slab_alloc`←`kds_alloc_command[zocl]`←`zocl_execbuf_ioctl`). **메모리/하드웨어/radix 회귀 아님**(모두 배제). 결함은 RT 인프라가 아니라 **zocl 벤더 드라이버의 메모리 안전 버그**(수정 위치가 radix 버그와 다름). RT-특이(선점 레이스) vs 잠복(SMMU 부재 DMA 스크리블)은 미확정. **★★★ 07-14~15 — 근본원인 확정 + 픽스 + 검증 완료(종결)**: `slub_debug=FZPU,kmalloc-256` 계측 부팅으로 재현 → 크래시 전에 `Poison overwritten` 리포트 생포. 해독 결과 **zocl KDS의 `kds_core.c`에서 `xrt_cu_submit(); set_xcmd_timestamp(KDS_QUEUED);` 순서 결함**(CU 스레드가 커맨드를 submit 직후 완료·해제할 수 있어, 타임스탬프 기록이 **해제된 메모리에 쓰는 use-after-free**가 됨 — 그 offset이 하필 SLUB freelist pointer 자리). RT의 넓은 preemption이 이 레이스를 노출(메커니즘 1 확정, SMMU/DMA 가설 폐기; upstream XRT master에도 잔존). **수정 = 타임스탬프를 submit 앞으로 순서 교체**(의미 동일, 3곳). 패치 = `~/ros2_ws/zocl_patches/`. **✅ 07-15 검증 완료**: 패치를 rev-6(`-rt-kv260c` #10, DEBUG off) 빌드에 합류 → 설치·부팅 → 계측(330s, zocl 156클라이언트) Poison 0 + 프로덕션(계측無 200s+) Oops 0 = 픽스 확정. 상세 `rt_kernel_postmortem.md §12-8`, 메모리 `zocl-dpu-rt-kernel-crash`.
 - **★ 2026-07-14 전략 결정 — RT 커널 패치 완성 우선, 비전 성능 개선(fps/latency)은 그 다음**: 비전 CPU 최적화(phase 1+2)가 완료돼 **4코어 중 ~2.2코어 여유** 확보(비전 ~1.8코어). EtherCAT(IgH) ~0.1~0.3코어 + 제어(IK·traj·SM) ~0.1~0.4코어 예상 → **3배+ 마진, CPU는 더 안 줄여도 통합 가능**(헤드룸 판정 §4.2). 따라서 다음 우선순위는 **성능 개선이 아니라 RT 커널 완성**(프로덕션 rev-6 + zocl 크래시 해소) — zocl 크래시가 RT 통합의 실선결조건이고, 성능 개선은 RT 위에서 baseline 재측정하는 게 맞음(RT 오버헤드 +5~10%p 예상). 성능 레버 카탈로그는 §4.2에 phase 3용으로 보존. RT 트랙 재개 = §5.2 + postmortem §12.
 - **★ 2026-07-14 카메라 FW 이슈 해결**: D435i FW 5.16.0.1이 librealsense 스트리밍 수십 초 후 RGB 프레임 정지(+dmesg `GET_CUR ... -32` 스톨)를 일으킴 — hardware_reset/물리 replug/재부팅으로 안 나음. **FW 5.17.0.10 업데이트(`rs-fw-update`)로 완치**, 직후 3분 완주(det 15.9Hz). 진단법·상세: 메모리 `d435i-fw-rgb-wedge-fix`. realsense config에 `initial_reset: true` 추가됨(웨지 방어). **CPU 베이스라인(순정커널·신FW): 총 76.8%, target_3d 68.9 / camera 53.6 / detector 43.4 / worker 36.9 / base 14.0 / pick_logic 9.7%** → `perf/runs/stock_fw51710_baseline_20260714/`.
@@ -51,7 +65,7 @@ Detect objects via vision → compute 3D pick position → generate robot trajec
 ### 1.5 두 트랙 개요
 | 트랙 | 지금 상태 | 다음 |
 |---|---|---|
-| **A. 비전** (§4) | 파이프라인 완성(~17 Hz, z 검증). YOLOv3-tiny 6-class 교체·**Gate 2~5 완성**(D14로 실물 apple 0.5→0.88, 6종 확정) | Gate 6(풀 파이프라인)·Gate 7(라이브) |
+| **A. 비전** (§4) | 파이프라인 완성(**21.7 Hz**, 2026-08-05 gate 0.030+shm IPC; z 검증, depth-color skew ≈0). YOLOv3-tiny 6-class·Gate 2~5 완성 | 실기 추적 검증(이동 물체) → 필요 시 워커 파이프라이닝(`throughput.md` §4) |
 | **B. 로봇 제어** (§5) | RT-PREEMPT 커널. **크래시 근본원인 규명·해결(2026-07-13, radix-tree 픽스, 253→0)** + **소크·cyclictest 통과(07-13/14, 부하 중 위반 0)**. CPU 격리 해제 | **rev-6(`-rt-kv260c`, DEBUG off) 빌드 진행 중(07-14)** → 설치·검증 → IgH EtherCAT(APU) → RPU FreeRTOS+SOEM |
 
 ---
@@ -206,6 +220,7 @@ PickTarget3D.msg    : std_msgs/Header header, bool target_valid, bool depth_vali
 - **P3 letterbox cv2 경로** (`vitis_ai_worker_yolo.py`): fancy-index 3회+매프레임 fill → `cvtColor(BGR2RGB)+cv2.LUT`+fill 1회 캐시. **bit-identical PASS**. `pre_ms 17.5→9.0`.
 - **P4 depth 30→15fps** (`realsense_pick_place.yaml`): 3D는 pick 시점 latest-depth만 사용 → 15fps로 camera/t3d depth 경로 절반. depth 최신성 33→66ms(정적 픽 장면 무해).
 - **검출률 캡** (`vitis_ai_detector.yaml process_period_sec: 0.045`): P3로 uncap 시 ~19Hz까지 오르나 절감분을 도로 소모 → 2프레임 주기(15Hz) 고정. **0.062는 지터로 3프레임 주기(13.8Hz)로 빠짐 — 45ms가 정답**. 0.0으로 되돌리면 ~19Hz(+3~5%p CPU).
+  **→ 2026-08-05 재결정: 0.030으로 완화**(이동 물체 전환으로 15Hz 캡의 전제 소멸) + worker IPC shm화 → 21.7Hz, CPU 1.60코어. 위 문단은 정적 물체 시절 기록으로 보존. 현행 정본은 `docs/vision/throughput.md`.
 
 | 노드 | 전(76.8% 총) | 후(53.1% 총) |
 |---|---|---|

@@ -342,6 +342,8 @@ PickTarget3D.msg    : std_msgs/Header header, bool target_valid, bool depth_vali
 > 게이트(의도된 15 Hz 상한)다. DPU도 73% 놀고 있다. 성능을 올리는 순서와 각 단계의
 > 이득·비용·위험은 **`docs/vision/throughput.md`**에 정리했다. 카메라나 DPU부터
 > 손대자는 제안은 거의 항상 틀렸다.
+> **08-05 후속**: 이동 물체 전환으로 게이트 0.045→0.030 재결정 + worker IPC를
+> pipe→/dev/shm mmap으로 교체(`shm_frame.py`) → **21.7 Hz**, CPU 변화 0. 같은 문서 §4에 실측.
 
 ---
 

@@ -19,7 +19,7 @@ The main pipeline separates into three distinct communication boundaries:
 2. **APU → RPU**: ROS2 pick decision and trajectory sent to RPU for robot control — **not yet implemented**
 3. **RPU → External Arm**: Ethernet protocol to Neuromeka Indy7 for trajectory execution — **not yet implemented**
 
-Current status: RealSense → DPU detection → 2D filtering → single-point 3D (reverse projection) → base-frame target on APU via ROS2 (15 Hz, E2E ~81 ms, z verified). The detector runs the **final pick-object model** — YOLOv3-tiny 6-class (apple / orange / banana / tennis_ball / mustard_bottle / person), INT8, trained and compiled for this DPU (the old SSD ADAS stand-in is retired). An RT kernel (`5.15.199-rt91-rt-kv260c`) is built and verified. Robot control layers (RPU bridge, Ethernet/EtherCAT trajectory protocol) not yet implemented — that is the next track.
+Current status: RealSense → DPU detection → 2D filtering → single-point 3D (reverse projection) → base-frame target on APU via ROS2 (**21.7 Hz, capture→base E2E p50 ~118 ms, depth-color skew ≈0** — 2026-08-05: moving-object pivot, gate 0.030 + /dev/shm worker IPC + sync'd 30/30 + nearest-stamp depth; z verified). The detector runs the **final pick-object model** — YOLOv3-tiny 6-class (apple / orange / banana / tennis_ball / mustard_bottle / person), INT8, trained and compiled for this DPU (the old SSD ADAS stand-in is retired). An RT kernel (`5.15.199-rt91-rt-kv260c`) is built and verified. Robot control layers (RPU bridge, Ethernet/EtherCAT trajectory protocol) not yet implemented — that is the next track.
 
 ## Current Implementation Snapshot — Perception (APU)
 
@@ -35,7 +35,7 @@ launches merged 2026-07-20), keep this same launch running and run
 `detection_viewer_pkg/detection_viewer_node` on the desktop — there is no
 separate viewing launch. The board only JPEG-compresses; the desktop draws.
 By default the viewer renders EVERY color frame (~30 fps) with the newest boxes
-(which update at ~15 Hz, so they lag the picture ~107 ms); `--sync` restores the
+(which update at the detection rate, ~15–22 Hz, so they lag the picture ~100 ms); `--sync` restores the
 old 15 fps frame-exact stamp join, which is the mode to use when verifying
 bbox↔frame alignment. The compressed topic encodes LAZILY (only while the
 viewer subscribes), so it adds nothing to the board when nobody is watching.
@@ -64,11 +64,11 @@ Node parameters live in `system_bringup_pkg/config/*.yaml` (one per node). Custo
 - `docs/vision/yolov3_tiny_execution_plan.md` — the model-swap plan as executed (dataset sourcing, UG1414 v2.5-grounded quantize/compile commands, phase gates). Historical: it says "7-class" and assumes synthetic-only data; both changed during execution (peach dropped → 6-class; real images added at D12/D14). `vision_final.md` is the accurate account.
 
 **Key perception facts (see `docs/vision/workflow.md` for detail):**
-- Detection runs in a **long-running worker process** (`vitis_ai_worker_yolo.py`); process isolation fixed a VART `execute_async` segfault. The detector↔worker boundary is a **model-agnostic JSON contract** (swapping the model touches only the worker's preprocessing constants + decode).
+- Detection runs in a **long-running worker process** (`vitis_ai_worker_yolo.py`); process isolation fixed a VART `execute_async` segfault. The detector↔worker boundary is a **model-agnostic JSON contract** (swapping the model touches only the worker's preprocessing constants + decode). Since 2026-08-05 the frame payload rides a **/dev/shm mmap** (one memcpy; `shm_frame.py`, fallback `worker_shm: false`) — only the JSON control lines stay on the pipe. Never unlink the shm file mid-run (inode trap — see `shm_frame.py` docstring).
 - **Preprocess = LUT**, **postprocess = background pre-filter** — both verified **bit-identical** to the naive version, large speedups.
 - **Callback pipelining**: the subscription callback only stores the newest frame; a worker thread consumes frames back-to-back.
 - **3D = single-point reverse projection** on raw depth (`align_depth` OFF); only the bbox-center pixel is matched to its depth pixel.
-- **Throughput is set by ONE place: the detector's worker loop**, as `max(camera supply 33.3 ms, processing ~43 ms, the process_period_sec gate 45 ms)` rounded UP to the next color-frame arrival → 62.9 ms = 15.3 Hz. The gate is the only binding constraint today; the camera supplies 29.4 Hz and the DPU is 73% idle. The 15 Hz cap is **deliberate** (see the rationale comment in `vitis_ai_detector.yaml`), decided when the target was static objects. **If asked to improve throughput, read `docs/vision/throughput.md` first and propose its §4 ladder in order** — starting with the camera or the DPU is almost always wrong. (The older claim "ceiling is camera supply rate" was true only while `align_depth` was on and throttled the camera to 12 Hz.)
+- **Throughput is set by ONE place: the detector's worker loop** — `max(camera supply 33.3 ms, processing time, the process_period_sec gate)` rounded UP to the next color-frame arrival. 2026-08-05 state: gate relaxed 0.045 → **0.030** (the old 15 Hz cap was deliberate but premised on static objects) and worker IPC moved from the stdin pipe to a **/dev/shm mmap** (`shm_frame.py`, ipc 13.4 → 4.65 ms) → **processing ~45 ms = 21.7 Hz**, CPU unchanged (1.60 cores), camera still supplies 29.4 Hz and the DPU is ~60% idle. Next lever: in-worker pipelining (pre ‖ DPU) to push processing under 33.3 ms — below that the freshness/rate trade-off disappears entirely. **If asked to improve throughput, read `docs/vision/throughput.md` first and propose its §4 ladder in order** — starting with the camera or the DPU is almost always wrong.
 - Build note: `vitis_ai_detector_pkg` is editable-installed (egg-link → src is live); `target_3d_pkg` needs `colcon build --packages-select target_3d_pkg --symlink-install` after edits. Config YAMLs are symlinked (live, no rebuild).
 
 ## User Level & Assumptions

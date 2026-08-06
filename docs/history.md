@@ -2626,3 +2626,53 @@ integration, and performance work is better re-baselined on top of RT (expect +5
 overhead there). A phase-3 performance lever catalog (POSIX-shm IPC as the one CPU/latency
 win-win, worker 3-stage pipelining, cap tuning, 60 fps color, the YOLOv3-tiny swap, rclcpp
 composition) is parked in `integrated_progress.md §4.2` for after RT is done.
+
+## Moving-object pivot: depth/color time alignment + throughput 15.3 → 21.7 Hz — 2026-08-04/05
+
+Premise change: the pipeline's target moved from static pick scenes to MOVING
+objects (real-time tracking), which re-opened two decisions that were correct
+for static scenes.
+
+**Depth/color time alignment (08-04).** With free-running streams (color 30 /
+depth 15, `enable_sync: false`) the depth frame used for a pick was captured
+p50 **+52.5 ms** away from the color frame the bbox came from — harmless when
+nothing moves, but on a mover the bbox pixel can leave the object and the node
+silently reads the background (all fail-safes pass; `depth_valid` stays true).
+Fixed as two halves, both required, measured in one run via the new
+`skew_if_latest_ms` control column:
+- `enable_sync: true` + depth 15→30 fps: every color frame gets a
+  same-timestamp depth partner (the ROS wrapper stamps a whole frameset with
+  ONE time `t` — which also re-attributes the 07-31 align A/B: align's
+  "skew 0" was the bundled sync's doing, align itself is spatial only).
+- `pick_target_3d_node`: 800 ms depth history (age-pruned deque) + nearest-
+  by-capture-stamp selection replaces "newest depth" — the detection arrives
+  ~90 ms late, so the newest frame is ~3 frames PAST the partner (sync alone
+  measured p50 33.3 ms). Result: skew |mean| 52.5 → **4.3 ms**, 89% exactly
+  0.0, cost +0.18 cores / E2E +1.8 ms / throughput 0
+  (`evidence/metrics/runs/sync30_compare_20260804.md`). Also fixed: `_emit`
+  re-read `latest_depth_msg` at emit time, so the skew column measured a frame
+  the pick never used. Viewer + operator GUI now draw every color frame
+  (~30 fps) with the newest boxes (0.5 s age gate); the exact stamp-join lives
+  on behind `--sync` for bbox↔frame verification.
+
+**Throughput (08-05, `docs/vision/throughput.md` is the canonical account).**
+The binding constraint was neither the camera (supplies 29.4 Hz) nor the DPU
+(73% idle) but `process_period_sec: 0.045` — a DELIBERATE 15 Hz cap from the
+07-14 CPU phase (its comment even documents the 33.3..66.6 ms window and the
+0.062 jitter trap), premised on static objects. Re-decided to 0.030. Measured
+same-scene back-to-back: the gate alone is a rate↔freshness trade, NOT free
+(+2.6 Hz but E2E p50 +14 ms — an ungated worker grabs the frame that SAT in
+latest_msg up to 33 ms instead of discarding and taking a fresh arrival; the
+first attempt at this A/B was invalidated by a scene change, 5→1 objects,
+which shifted processing across the gate and mimicked a config effect).
+The trade was then dissolved by landing the IPC lever parked in the 07-14
+phase-3 catalog: frames now cross to the worker via a **/dev/shm mmap**
+(`shm_frame.py`, one memcpy, read-only view, growth keeps the inode; fallback
+`worker_shm: false`) instead of 3-4 copies through the stdin pipe. Same scene:
+ipc 13.4 → **4.65 ms**, processing 53.0 → **44.9 ms**, **15.3 → 21.7 Hz**,
+E2E p50/p95 −10/−11 ms, freshness p50/p95 −14/−16 ms, **CPU unchanged 1.60**,
+zero worker restarts/timeouts. 0.030+shm now dominates the old 0.045 on every
+metric (`evidence/metrics/runs/gate_ipc_20260805.md`). Next lever, only if
+tracking proves 21.7 Hz insufficient: in-worker pipelining (pre ‖ DPU) to push
+processing under 33.3 ms, where the worker always waits for a fresh arrival
+and the freshness/rate trade disappears structurally.
